@@ -1,0 +1,71 @@
+name: CI (reusable)
+
+# Reusable CI workflow for any Frazzled Productions repo, parameterised across stacks
+# (Next/Vitest, Expo, plain Node). Consumers call it with their own commands:
+#
+#   jobs:
+#     ci:
+#       uses: Frazzled-Productions/.github/.github/workflows/ci.yml@main
+#       with:
+#         node-version: '24'
+#         lint: npm run lint
+#         typecheck: npm run typecheck
+#         test: npm test
+#         build: npm run build
+#
+# Any step whose input is left empty is skipped. Private consumer repos must be
+# allowed to use this workflow: in this (.github) repo's Settings -> Actions ->
+# General -> Access, allow access from repositories in the organisation.
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '20'
+      working-directory:
+        type: string
+        default: '.'
+      install:
+        type: string
+        default: 'npm ci'
+      lint:
+        type: string
+        default: ''
+      typecheck:
+        type: string
+        default: ''
+      test:
+        type: string
+        default: ''
+      build:
+        type: string
+        default: ''
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+      - name: Install
+        run: ${{ inputs.install }}
+      - name: Lint
+        if: ${{ inputs.lint != '' }}
+        run: ${{ inputs.lint }}
+      - name: Typecheck
+        if: ${{ inputs.typecheck != '' }}
+        run: ${{ inputs.typecheck }}
+      - name: Test
+        if: ${{ inputs.test != '' }}
+        run: ${{ inputs.test }}
+      - name: Build
+        if: ${{ inputs.build != '' }}
+        run: ${{ inputs.build }}

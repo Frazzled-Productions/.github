@@ -1,0 +1,99 @@
+name: iOS CI (reusable)
+
+# Reusable CI for the quick iOS apps (XcodeGen project + a local engine Swift package), run on the
+# calling repo's self-hosted Mac runner so no paid GitHub macOS minutes are used. Checks, in order:
+# the committed .xcodeproj matches project.yml, no em dashes anywhere (house style), engine tests,
+# app tests on the simulator. Consumer (thin caller in the app repo):
+#
+#   jobs:
+#     test:
+#       name: Engine and app tests
+#       uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@main
+#       with:
+#         project: LoopYear.xcodeproj
+#         scheme: LoopYear
+#         engine-package: LoopYearEngine
+#       secrets: inherit
+#
+# Triggers and concurrency stay in the caller. Jobs run on the caller's own runners, so each app
+# keeps its own runner instance (ops/standards/new-ios-app-playbook.md, section 5).
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: The committed Xcode project XcodeGen generates, e.g. LoopYear.xcodeproj.
+        type: string
+        required: true
+      scheme:
+        description: The app scheme whose tests run on the simulator.
+        type: string
+        required: true
+      engine-package:
+        description: Path to the engine Swift package, e.g. LoopYearEngine.
+        type: string
+        required: true
+      simulator:
+        description: Simulator device name for the app tests.
+        type: string
+        default: iPhone 18 Pro
+      runs-on:
+        description: Runner labels as a JSON array.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      timeout-minutes:
+        type: number
+        default: 30
+
+jobs:
+  test:
+    name: Engine and app tests
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    env:
+      PROJECT: ${{ inputs.project }}
+      SCHEME: ${{ inputs.scheme }}
+      ENGINE_PACKAGE: ${{ inputs.engine-package }}
+      SIMULATOR: ${{ inputs.simulator }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode project matches project.yml
+        run: |
+          xcodegen generate --quiet
+          if ! git diff --quiet -- "$PROJECT"; then
+            echo "::error::$PROJECT is out of date. Run 'xcodegen generate' and commit the result."
+            git diff --stat -- "$PROJECT"
+            exit 1
+          fi
+
+      # The character is written as chr(0x2014) so this file contains no em dash itself, and so an
+      # agent that turns a typed escape back into the character cannot break the check.
+      - name: No em dashes (house style)
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          bad = []
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if d not in ('.git', 'build', '.build')]
+              for name in files:
+                  path = os.path.join(root, name)
+                  try:
+                      text = open(path, encoding='utf-8').read()
+                  except (UnicodeDecodeError, OSError):
+                      continue
+                  if chr(0x2014) in text:
+                      bad.append(path)
+          if bad:
+              print('::error::Em dashes found (house style bans them): ' + ', '.join(bad))
+              sys.exit(1)
+          PY
+
+      - name: Engine tests
+        run: swift test --package-path "$ENGINE_PACKAGE"
+
+      - name: App tests (simulator)
+        run: |
+          xcodebuild test -project "$PROJECT" -scheme "$SCHEME" \
+            -destination "platform=iOS Simulator,name=$SIMULATOR" \
+            -derivedDataPath build/ci CODE_SIGNING_ALLOWED=NO -quiet

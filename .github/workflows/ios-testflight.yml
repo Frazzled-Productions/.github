@@ -1,0 +1,99 @@
+name: iOS TestFlight upload (reusable)
+
+# Reusable "archive and upload to TestFlight" for the quick iOS apps, run on the calling repo's
+# self-hosted Mac runner. Runs the engine tests, copies the Release RevenueCat key in from the build
+# Mac (checking it is gitignored), runs the app's own release script (which signs with the App Store
+# Connect API key) and always deletes the key file afterwards. Consumer (thin caller):
+#
+#   on:
+#     push:
+#       branches: [main]
+#       paths-ignore: ["docs/**", "**/*.md"]
+#     workflow_dispatch:
+#   concurrency:
+#     group: testflight-upload
+#     cancel-in-progress: false
+#   jobs:
+#     upload:
+#       name: Archive and upload to TestFlight
+#       uses: Frazzled-Productions/.github/.github/workflows/ios-testflight.yml@main
+#       with:
+#         engine-package: LoopYearEngine
+#         secrets-xcconfig: ${{ vars.SECRETS_XCCONFIG || '/Users/fraser/.config/loop-year/Secrets.xcconfig' }}
+#         asc-key-id: ${{ vars.ASC_KEY_ID }}
+#         asc-issuer-id: ${{ vars.ASC_ISSUER_ID }}
+#       secrets: inherit
+#
+# The key ID and issuer ID are identifiers, not secrets; the caller passes its own repo variables.
+# Setup steps: ops/standards/new-ios-app-playbook.md, section 6.
+
+on:
+  workflow_call:
+    inputs:
+      engine-package:
+        description: Path to the engine Swift package, e.g. LoopYearEngine.
+        type: string
+        required: true
+      secrets-xcconfig:
+        description: Absolute path on the build Mac of the keeper Secrets.xcconfig (RevenueCat key).
+        type: string
+        required: true
+      asc-key-id:
+        description: App Store Connect API key ID (the caller's ASC_KEY_ID variable).
+        type: string
+        required: true
+      asc-issuer-id:
+        description: App Store Connect API issuer ID (the caller's ASC_ISSUER_ID variable).
+        type: string
+        required: true
+      release-script:
+        description: The app's archive-and-upload script.
+        type: string
+        default: tools/release/testflight.sh
+      runs-on:
+        description: Runner labels as a JSON array.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      timeout-minutes:
+        type: number
+        default: 60
+
+jobs:
+  upload:
+    name: Archive and upload to TestFlight
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Engine tests must pass before shipping
+        env:
+          ENGINE_PACKAGE: ${{ inputs.engine-package }}
+        run: swift test --package-path "$ENGINE_PACKAGE"
+
+      - name: Provide the Release RevenueCat key
+        env:
+          SECRETS_XCCONFIG: ${{ inputs.secrets-xcconfig }}
+        run: |
+          set -euo pipefail
+          [ -f "$SECRETS_XCCONFIG" ] || { echo "::error::No Secrets.xcconfig at $SECRETS_XCCONFIG"; exit 1; }
+          cp "$SECRETS_XCCONFIG" Config/Secrets.xcconfig
+          chmod 600 Config/Secrets.xcconfig
+          git check-ignore -q Config/Secrets.xcconfig || { rm -f Config/Secrets.xcconfig; echo "::error::Secrets.xcconfig is not gitignored"; exit 1; }
+
+      - name: Archive and upload
+        env:
+          ASC_KEY_ID: ${{ inputs.asc-key-id }}
+          ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+          RELEASE_SCRIPT: ${{ inputs.release-script }}
+        run: zsh "$RELEASE_SCRIPT"
+
+      - name: Remove the key file
+        if: always()
+        run: rm -f Config/Secrets.xcconfig
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "### TestFlight build uploaded from \`${GITHUB_SHA::7}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Internal testers see it once Apple finishes processing." >> "$GITHUB_STEP_SUMMARY"

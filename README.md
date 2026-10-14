@@ -21,7 +21,30 @@ jobs:
       test: npm test
       build: npm run build
 ```
-Private consumer repos need this repo's **Settings → Actions → Access** to allow org repositories.
+- **`ios-ci.yml`** - CI for the quick iOS apps (`workflow_call`): XcodeGen project check, no em
+  dashes, engine package tests, app tests on the simulator, on the caller's self-hosted Mac runner.
+  Inputs: `project`, `scheme`, `engine-package`, optional `simulator`, `runs-on`, `timeout-minutes`.
+  Used by Loop Year and Roast Conductor.
+- **`ios-testflight.yml`** - archive and upload to TestFlight (`workflow_call`): engine tests, the
+  Release RevenueCat key copied in and removed afterwards, the app's own `tools/release/testflight.sh`.
+  Inputs: `engine-package`, `secrets-xcconfig`, `asc-key-id`, `asc-issuer-id`, optional
+  `release-script`, `runs-on`, `timeout-minutes`. Consumer snippets are in each file's header.
+
+```yaml
+jobs:
+  test:
+    name: Engine and app tests
+    uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@main
+    with:
+      project: LoopYear.xcodeproj
+      scheme: LoopYear
+      engine-package: LoopYearEngine
+    secrets: inherit
+```
+
+This repo is **public**, so private org repos can call its workflows without any Access setting
+(GitHub applies the **Settings → Actions → Access** policy only to private and internal repos). If it
+is ever made private, that setting must allow org repositories, or every consumer breaks.
 
 ## Automation identity
 - **[`frazzled-bot.md`](frazzled-bot.md)** - setup spec for the org automation App (manual, one-time

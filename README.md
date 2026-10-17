@@ -15,7 +15,7 @@ Consumer (thin caller in the app repo's `.github/workflows/`):
 ```yaml
 jobs:
   ci:
-    uses: Frazzled-Productions/.github/.github/workflows/ci.yml@main
+    uses: Frazzled-Productions/.github/.github/workflows/ci.yml@v1
     with:
       node-version: '24'
       lint: npm run lint
@@ -52,17 +52,24 @@ Callers need no `secrets: inherit`: none of these workflows declares a secret.
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
 Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode.
 
-Callers currently use `@main`, so a merge here changes CI and TestFlight in every consumer at once.
-Planned release flow (needs the owner's approval, because tags are shared state):
+`main` is protected by a repo ruleset: changes land by PR only, and `actionlint and zizmor` plus
+`Test integrity / Test integrity` must pass (admins can bypass only through a PR).
+
+### RELEASING
+Callers pin the moving major tag `@v1`, so a merge to main changes nothing in consumers until the
+tag moves. `v1.0.0` (2026-10-17) is the first release.
 1. Change on a branch; prove it on one caller by pointing that caller at the branch ref in a draft PR.
 2. Merge here once self-test and the caller's run are green.
-3. Tag `vX.Y.Z` and move the major tag (`v1`) to it; callers pin `@v1`.
+3. Tag the new main head `vX.Y.Z` (annotated), then move `v1` to it:
+   `git tag -a v1.0.1 -m "..." && git tag -f -a v1 -m "v1: now v1.0.1" v1.0.1 && git push origin v1.0.1 && git push -f origin v1`.
+4. A breaking change (renamed or removed input, new required secret) gets a new major tag (`v2`) and
+   a PR in each caller; `v1` stays where it is.
 
 ```yaml
 jobs:
   test:
     name: Engine and app tests
-    uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@main
+    uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@v1
     with:
       project: LoopYear.xcodeproj
       scheme: LoopYear

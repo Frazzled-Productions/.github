@@ -8,7 +8,7 @@ name: iOS CI (reusable)
 #   jobs:
 #     test:
 #       name: Engine and app tests
-#       uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@main
+#       uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@v1
 #       with:
 #         project: LoopYear.xcodeproj
 #         scheme: LoopYear

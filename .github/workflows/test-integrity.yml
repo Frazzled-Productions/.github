@@ -22,7 +22,7 @@ name: Test integrity (reusable)
 #   jobs:
 #     test-integrity:
 #       name: Test integrity
-#       uses: Frazzled-Productions/.github/.github/workflows/test-integrity.yml@main
+#       uses: Frazzled-Productions/.github/.github/workflows/test-integrity.yml@v1
 #       with:
 #         warn-only: false
 #

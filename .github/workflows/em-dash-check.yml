@@ -1,0 +1,91 @@
+name: Em-dash check (reusable)
+
+# House style bans em dashes (ops/standards/conventions.md). This checks only the lines a change
+# adds, so old text does not block new work; fix old hits as you touch them. Consumer:
+#
+#   on:
+#     pull_request:
+#     push:
+#       branches: [main]
+#   jobs:
+#     em-dash:
+#       uses: Frazzled-Productions/.github/.github/workflows/em-dash-check.yml@main
+#       with:
+#         exclude: |
+#           docs/research/**
+#
+# On pull_request it diffs the PR base against the head; on push it diffs the pushed range
+# (github.event.before..after). `exclude` takes git pathspec globs, one per line, for files that
+# may quote em dashes (third-party text, research notes). The character is written as chr(0x2014)
+# so this file contains none itself.
+
+on:
+  workflow_call:
+    inputs:
+      exclude:
+        description: Git pathspec globs to skip, one per line.
+        type: string
+        default: ''
+      runs-on:
+        description: Runner label.
+        type: string
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+
+jobs:
+  em-dash:
+    name: No em dashes in added lines
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Check added lines
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess, sys
+          event = os.environ["EVENT"]
+          if event in ("pull_request", "pull_request_target"):
+              base = subprocess.run(["git", "merge-base", os.environ["PR_BASE"], os.environ["PR_HEAD"]],
+                                    capture_output=True, text=True, check=True).stdout.strip()
+              head = os.environ["PR_HEAD"]
+          elif event == "push":
+              base, head = os.environ["PUSH_BEFORE"], os.environ["PUSH_AFTER"]
+              if not base or set(base) == {"0"}:
+                  print("New branch push: nothing to diff against, skipping.")
+                  sys.exit(0)
+          else:
+              print(f"Event {event} has no diff to check, skipping.")
+              sys.exit(0)
+          excludes = [f":(exclude,glob){g.strip()}" for g in os.environ["EXCLUDE"].splitlines() if g.strip()]
+          diff = subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "-U0", base, head, "--", "."] + excludes,
+                                capture_output=True, text=True, check=True, errors="replace").stdout
+          dash = chr(0x2014)
+          hits, path, line = [], None, 0
+          for raw in diff.splitlines():
+              if raw.startswith("+++ "):
+                  path = raw[6:] if raw.startswith("+++ b/") else None
+              elif raw.startswith("@@"):
+                  m = re.search(r"\+(\d+)", raw)
+                  line = int(m.group(1)) if m else 0
+              elif raw.startswith("+") and path:
+                  if dash in raw:
+                      hits.append((path, line))
+                  line += 1
+          for p, n in hits:
+              print(f"::error file={p},line={n}::Em dash added (house style bans them). Use a comma, colon, parentheses or a spaced hyphen.")
+          if hits:
+              sys.exit(1)
+          print("No em dashes in added lines.")
+          PY

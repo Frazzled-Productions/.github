@@ -1,0 +1,14 @@
+name: Em-dash check
+
+# This repo's own caller, which also exercises the reusable workflow on every PR that changes it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  em-dash:
+    uses: ./.github/workflows/em-dash-check.yml

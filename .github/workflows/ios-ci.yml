@@ -13,7 +13,6 @@ name: iOS CI (reusable)
 #         project: LoopYear.xcodeproj
 #         scheme: LoopYear
 #         engine-package: LoopYearEngine
-#       secrets: inherit
 #
 # Triggers and concurrency stay in the caller. Jobs run on the caller's own runners, so each app
 # keeps its own runner instance (ops/standards/new-ios-app-playbook.md, section 5).
@@ -56,7 +55,9 @@ jobs:
       ENGINE_PACKAGE: ${{ inputs.engine-package }}
       SIMULATOR: ${{ inputs.simulator }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Xcode project matches project.yml
         run: |

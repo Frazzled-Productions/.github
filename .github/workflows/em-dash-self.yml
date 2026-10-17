@@ -11,4 +11,4 @@ permissions:
 
 jobs:
   em-dash:
-    uses: ./.github/workflows/em-dash-check.yml
+    uses: ./.github/workflows/em-dash-check.yml # zizmor: ignore[self-repository]

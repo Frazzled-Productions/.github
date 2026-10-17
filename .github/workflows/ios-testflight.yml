@@ -3,27 +3,34 @@ name: iOS TestFlight upload (reusable)
 # Reusable "archive and upload to TestFlight" for the quick iOS apps, run on the calling repo's
 # self-hosted Mac runner. Runs the engine tests, copies the Release RevenueCat key in from the build
 # Mac (checking it is gitignored), runs the app's own release script (which signs with the App Store
-# Connect API key) and always deletes the key file afterwards. Consumer (thin caller):
+# Connect API key) and always deletes the key file afterwards. Consumer (thin caller): it must run
+# only after CI has passed on the same main commit, so it triggers on workflow_run of CI. The full
+# caller, with the gate job (tested SHA is still the tip of main; docs-only merges skipped), is
+# loop-year/.github/workflows/testflight-on-main.yml. Outline:
 #
 #   on:
-#     push:
+#     workflow_run:
+#       workflows: [CI]
+#       types: [completed]
 #       branches: [main]
-#       paths-ignore: ["docs/**", "**/*.md"]
 #     workflow_dispatch:
 #   concurrency:
 #     group: testflight-upload
 #     cancel-in-progress: false
 #   jobs:
+#     gate: ...            # success + push + main, github.sha == workflow_run.head_sha, not docs-only
 #     upload:
-#       name: Archive and upload to TestFlight
+#       needs: gate
+#       if: needs.gate.outputs.upload == 'true'
 #       uses: Frazzled-Productions/.github/.github/workflows/ios-testflight.yml@main
 #       with:
 #         engine-package: LoopYearEngine
 #         secrets-xcconfig: ${{ vars.SECRETS_XCCONFIG || '/Users/fraser/.config/loop-year/Secrets.xcconfig' }}
 #         asc-key-id: ${{ vars.ASC_KEY_ID }}
 #         asc-issuer-id: ${{ vars.ASC_ISSUER_ID }}
-#       secrets: inherit
 #
+# This workflow checks out github.sha, which for workflow_run is the tip of main; that is why the
+# caller's gate requires the tested commit to still be the tip.
 # The key ID and issuer ID are identifiers, not secrets; the caller passes its own repo variables.
 # Setup steps: ops/standards/new-ios-app-playbook.md, section 6.
 
@@ -64,7 +71,9 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Engine tests must pass before shipping
         env:

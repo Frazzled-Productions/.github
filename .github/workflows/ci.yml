@@ -22,7 +22,7 @@ on:
     inputs:
       node-version:
         type: string
-        default: '20'
+        default: '24'
       working-directory:
         type: string
         default: '.'
@@ -42,30 +42,43 @@ on:
         type: string
         default: ''
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
+    # Commands arrive as inputs from the caller's own workflow file and are passed through env vars,
+    # never interpolated into the script text (template injection; zizmor checks this in self-test).
+    env:
+      INSTALL_CMD: ${{ inputs.install }}
+      LINT_CMD: ${{ inputs.lint }}
+      TYPECHECK_CMD: ${{ inputs.typecheck }}
+      TEST_CMD: ${{ inputs.test }}
+      BUILD_CMD: ${{ inputs.build }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
           cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
       - name: Install
-        run: ${{ inputs.install }}
+        run: eval "$INSTALL_CMD"
       - name: Lint
         if: ${{ inputs.lint != '' }}
-        run: ${{ inputs.lint }}
+        run: eval "$LINT_CMD"
       - name: Typecheck
         if: ${{ inputs.typecheck != '' }}
-        run: ${{ inputs.typecheck }}
+        run: eval "$TYPECHECK_CMD"
       - name: Test
         if: ${{ inputs.test != '' }}
-        run: ${{ inputs.test }}
+        run: eval "$TEST_CMD"
       - name: Build
         if: ${{ inputs.build != '' }}
-        run: ${{ inputs.build }}
+        run: eval "$BUILD_CMD"

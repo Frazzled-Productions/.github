@@ -1,0 +1,15 @@
+# This repo's own copy of templates/dependabot.yml: workflows only.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]

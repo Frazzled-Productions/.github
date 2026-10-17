@@ -1,0 +1,57 @@
+# Reference Dependabot config for Frazzled Productions repos (ops A10).
+# GitHub has no inheritance for dependabot.yml, so each repo keeps its own
+# copy at .github/dependabot.yml. Copy this file, then:
+#   - keep only the ecosystems the repo uses (npm, swift, github-actions);
+#   - delete the target-branch lines if the repo has no qa gate (koinori and
+#     poke-memory have one; their main only accepts PRs from qa);
+#   - add repo-specific ignore rules, each commented with the reason and the
+#     issue or package that blocks the update.
+#
+# cooldown: a new release waits 7 days before Dependabot proposes it, so a
+# compromised or broken release is usually pulled before it reaches us.
+# Security updates bypass the cooldown.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    target-branch: "qa" # delete without a qa gate
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      # One PR for all minor and patch bumps. Majors arrive one per PR and are
+      # a decision item, never auto-merged.
+      npm-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "swift"
+    directory: "/"
+    target-branch: "qa" # delete without a qa gate
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      swift-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "qa" # delete without a qa gate
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]

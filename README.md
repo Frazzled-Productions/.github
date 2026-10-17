@@ -7,7 +7,9 @@ The org's shared GitHub config + **reusable CI/automation workflows** - the work
 
 ## Reusable workflows (`.github/workflows/`)
 - **`ci.yml`** - parameterised CI (`workflow_call`): install + optional lint / typecheck / test / build,
-  configurable node version + working directory. Stack-agnostic (Next, Expo, plain Node). **(live)**
+  configurable node version + working directory. Stack-agnostic (Next, Expo, plain Node).
+  **Unused:** no repo calls it (checked 2026-10-17). Kept as a starting point for the npm repos;
+  delete it if it is still uncalled at the next process review.
 
 Consumer (thin caller in the app repo's `.github/workflows/`):
 ```yaml
@@ -46,15 +48,17 @@ This repo is **public**, so private org repos can call its workflows without any
 (GitHub applies the **Settings → Actions → Access** policy only to private and internal repos). If it
 is ever made private, that setting must allow org repositories, or every consumer breaks.
 
-## Automation identity
-- **[`frazzled-bot.md`](frazzled-bot.md)** - setup spec for the org automation App (manual, one-time
-  owner action). Required before the bot-dependent workflows below.
+## Not planned
+Planned for porting from Poke Memory in June 2026, then dropped because no live repo needs them:
+- `auto-review`, `auto-release`, `auto-issue` / `auto-pr`. The App spec they needed,
+  [`frazzled-bot.md`](frazzled-bot.md), is parked with them.
 
-## To port (pulled through as consumers need them; bot-dependent → after `frazzled-bot` exists)
-- `auto-review` - runs the `code-reviewer` agent on PRs, posts an idempotent punch list.
-- `auto-release` - changelog-fragment assembly + SemVer bump + tag (needs the bot's ruleset bypass).
-- `auto-issue` / `auto-pr` - the command-driven plan→implement→fix orchestration (the heaviest;
-  generalise from Poké Memory once the simpler pieces are proven on Sprue).
+## Shared templates
+- **`PULL_REQUEST_TEMPLATE.md`** - the org default PR template (Evidence, Not done, `Refs #`). A repo's
+  own template overrides it.
+- **[`templates/dependabot.yml`](templates/dependabot.yml)** - the reference Dependabot config
+  (7-day cooldown, grouped minor and patch, github-actions, `target-branch: qa` behind a qa gate).
+  There is no inheritance, so each repo keeps a copy.
 
-Org-level secrets + rulesets need GitHub Team; the org is on Free ([ops ADR 0005]), so wiring is
-per-repo (secrets, ruleset bypass) by design.
+The org is on GitHub Team (`gh api orgs/Frazzled-Productions -q .plan.name`), but secrets and
+ruleset bypasses are still wired per repo.

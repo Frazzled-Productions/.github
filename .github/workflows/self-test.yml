@@ -1,0 +1,45 @@
+name: Self-test
+
+# Checks this repo's own workflows on every PR and on main, on GitHub-hosted Ubuntu (never the
+# self-hosted Mac runner: this repo is public, so anyone could open a PR that runs on it).
+#   - actionlint: syntax, expressions, shellcheck of run scripts;
+#   - zizmor: Actions security audit (template injection, unpinned actions, credentials);
+#   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: actionlint and zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run zizmor==1.31.1 --format=github .github/workflows/
+
+  test-integrity:
+    name: Test integrity
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/test-integrity.yml # zizmor: ignore[self-repository]
+    with:
+      warn-only: true

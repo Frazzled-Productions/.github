@@ -1,0 +1,202 @@
+name: Test integrity (reusable)
+
+# Flags the cheap ways to turn CI green without fixing anything, so a human sees them:
+#   - deleted test files;
+#   - newly added skips in test files: XCTSkip, withKnownIssue, .disabled(, .skip(, .only(,
+#     test.fixme, xit(, xdescribe(, pytest skip;
+#   - changed (modified or deleted) snapshot or visual baselines;
+#   - changed numeric thresholds (coverage, budgets, tolerances) in test or config files, old -> new.
+# Lists them in one sticky PR comment and fails unless the PR body has a "## Test changes" section
+# that names each flagged file. Assertion changes are deliberately not parsed (too noisy).
+# Process rule: ops/standards/process.md (weakening a test check to reach green must be justified).
+#
+# Consumer (thin caller in the app repo's .github/workflows/test-integrity.yml):
+#
+#   name: Test integrity
+#   on:
+#     pull_request:
+#       types: [opened, edited, synchronize, reopened]
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#   jobs:
+#     test-integrity:
+#       name: Test integrity
+#       uses: Frazzled-Productions/.github/.github/workflows/test-integrity.yml@main
+#       with:
+#         warn-only: false
+#
+# "edited" matters: adding the justification to the PR body re-runs the check.
+
+on:
+  workflow_call:
+    inputs:
+      warn-only:
+        description: Report findings as warnings and pass, instead of failing (for a trial period).
+        type: boolean
+        default: false
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string.
+        type: string
+        default: '"ubuntu-latest"'
+      extra-test-pattern:
+        description: Extra Python regex (matched against the path) for files that count as tests.
+        type: string
+        default: ''
+      extra-snapshot-pattern:
+        description: Extra Python regex (matched against the path) for snapshot or baseline files.
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  test-integrity:
+    name: Test integrity
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check test changes
+        env:
+          WARN_ONLY: ${{ inputs.warn-only }}
+          EXTRA_TEST_PATTERN: ${{ inputs.extra-test-pattern }}
+          EXTRA_SNAPSHOT_PATTERN: ${{ inputs.extra-snapshot-pattern }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys, urllib.request
+
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          pr = event["pull_request"]
+          base, head, number = pr["base"]["sha"], pr["head"]["sha"], pr["number"]
+          body = pr.get("body") or ""
+          warn_only = os.environ.get("WARN_ONLY") == "true"
+          repo = os.environ["GITHUB_REPOSITORY"]
+          api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          marker = "<!-- test-integrity -->"
+
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+
+          merge_base = git("merge-base", base, head).strip()
+          test_re = re.compile(
+              r"(^|/)(Tests?|tests?|__tests__|e2e|spec|specs|UITests)/"
+              r"|(^|/)[^/]*(Tests?|Spec)\.swift$"
+              r"|\.(test|spec)\.[cm]?[jt]sx?$"
+              r"|(^|/)test_[^/]*\.py$|_test\.(py|go)$"
+              + (("|" + os.environ["EXTRA_TEST_PATTERN"]) if os.environ.get("EXTRA_TEST_PATTERN") else "")
+          )
+          snap_re = re.compile(
+              r"(^|/)__(S|s)napshots__/|\.snap$|-snapshots/|(^|/)ReferenceImages[^/]*/"
+              r"|(^|/)(baselines?|visual-baselines?)/"
+              + (("|" + os.environ["EXTRA_SNAPSHOT_PATTERN"]) if os.environ.get("EXTRA_SNAPSHOT_PATTERN") else "")
+          )
+          skip_re = re.compile(
+              r"\bXCTSkip\b|\bwithKnownIssue\b|\.disabled\(|\.skip\(|\.only\(|\btest\.fixme\b"
+              r"|\b(xit|xdescribe|xtest)\(|@pytest\.mark\.skip|\bt\.Skip\("
+          )
+          threshold_re = re.compile(
+              r"(threshold|coverage|minimum|\bmin[A-Z_a-z]*|tolerance|precision|maxDiff[A-Za-z]*|budget)",
+              re.I,
+          )
+          num_re = re.compile(r"-?\d+(\.\d+)?")
+          ignored = re.compile(r"\.md$|^\.github/")
+          config_re = re.compile(r"(config|budget|threshold|coverage|codecov|lighthouse|perf)[^/]*$|\.(json|ya?ml|toml)$", re.I)
+
+          findings = []  # (kind, path, detail)
+          for line in git("diff", "--name-status", "--no-renames", merge_base, head).splitlines():
+              status, path = line.split("\t", 1)
+              if status == "D" and test_re.search(path) and not snap_re.search(path):
+                  findings.append(("Deleted test file", path, ""))
+              if status in ("M", "D") and snap_re.search(path):
+                  findings.append(("Changed snapshot or baseline", path, "deleted" if status == "D" else "modified"))
+
+          diff = git("diff", "-U0", "--no-renames", "--no-color", merge_base, head)
+          path, removed, in_header = None, {}, False
+          for line in diff.splitlines():
+              if line.startswith("diff --git "):
+                  path, removed, in_header = None, {}, True
+                  continue
+              if in_header:
+                  if line.startswith("+++ "):
+                      path = line[6:] if line.startswith("+++ b/") else None
+                  elif line.startswith("@@"):
+                      in_header = False
+                  continue
+              if line.startswith("@@") or path is None or ignored.search(path):
+                  continue
+              is_test = bool(test_re.search(path))
+              watch_thresholds = is_test or bool(config_re.search(path))
+              text = line[1:]
+              if line.startswith("-") and watch_thresholds and threshold_re.search(text) and num_re.search(text):
+                  removed[num_re.sub("#", text).strip()] = text.strip()
+              if not line.startswith("+"):
+                  continue
+              if is_test and skip_re.search(text):
+                  findings.append(("New skip", path, text.strip()[:120]))
+              if watch_thresholds and threshold_re.search(text) and num_re.search(text):
+                  old = removed.get(num_re.sub("#", text).strip())
+                  if old and old != text.strip():
+                      findings.append(("Changed threshold", path, f"{old[:60]} -> {text.strip()[:60]}"))
+
+          section = ""
+          m = re.search(r"^##\s*Test changes\s*$(.*?)(?=^##\s|\Z)", body, re.M | re.S | re.I)
+          if m:
+              section = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip()
+          unjustified = sorted({p for _, p, _ in findings if os.path.basename(p) not in section})
+
+          if findings:
+              rows = "\n".join(f"| {k} | `{p}` | {d.replace('|', '/')} |" for k, p, d in findings)
+              verdict = (
+                  "Every flagged file is named under `## Test changes`." if not unjustified else
+                  "Add a `## Test changes` section to the PR body with one line per flagged file "
+                  "(its file name plus why). Not yet justified: " + ", ".join(f"`{p}`" for p in unjustified)
+              )
+              comment = (f"{marker}\n### Test integrity\n\n| Finding | File | Detail |\n|---|---|---|\n{rows}\n\n{verdict}"
+                         + ("\n\n_Warn-only mode: this check does not fail yet._" if warn_only else ""))
+          else:
+              comment = f"{marker}\n### Test integrity\n\nNo deleted tests, new skips, changed baselines or changed thresholds."
+
+          def call(method, url, data=None):
+              req = urllib.request.Request(url, method=method, data=json.dumps(data).encode() if data else None, headers={
+                  "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                  "Accept": "application/vnd.github+json",
+              })
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read() or b"null")
+
+          try:
+              existing = None
+              page = 1
+              while existing is None:
+                  batch = call("GET", f"{api}/repos/{repo}/issues/{number}/comments?per_page=100&page={page}")
+                  existing = next((c for c in batch if marker in (c.get("body") or "")), None)
+                  if len(batch) < 100:
+                      break
+                  page += 1
+              if existing:
+                  call("PATCH", f"{api}/repos/{repo}/issues/comments/{existing['id']}", {"body": comment})
+              elif findings:
+                  call("POST", f"{api}/repos/{repo}/issues/{number}/comments", {"body": comment})
+          except Exception as e:  # a comment failure must not hide the verdict
+              print(f"::warning::Could not post the sticky comment: {e}")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write(comment.replace(marker, "") + "\n")
+          for k, p, d in findings:
+              print(f"{k}: {p} {d}")
+          if unjustified:
+              level = "warning" if warn_only else "error"
+              print(f"::{level}::Test integrity: {len(unjustified)} flagged file(s) not named under '## Test changes' in the PR body.")
+              sys.exit(0 if warn_only else 1)
+          PY

@@ -29,6 +29,26 @@ jobs:
   Release RevenueCat key copied in and removed afterwards, the app's own `tools/release/testflight.sh`.
   Inputs: `engine-package`, `secrets-xcconfig`, `asc-key-id`, `asc-issuer-id`, optional
   `release-script`, `runs-on`, `timeout-minutes`. Consumer snippets are in each file's header.
+  The caller must run it only after CI passes on the same main commit (`workflow_run` on CI plus a
+  gate job); see the header of `ios-testflight.yml`.
+- **`test-integrity.yml`** - flags deleted test files, new skips (XCTSkip, withKnownIssue,
+  `.disabled(`, `.skip(`, `.only(`, `test.fixme`), changed snapshot or visual baselines and changed
+  thresholds, in one sticky PR comment, and fails unless the PR body has a `## Test changes` section
+  naming each flagged file. Inputs: `warn-only` (pass with warnings, for a trial period), `runs-on`,
+  `extra-test-pattern`, `extra-snapshot-pattern`. The caller needs `pull-requests: write` and the
+  `edited` PR event type, so fixing the PR body re-runs it. Snippet in the file header.
+
+Callers need no `secrets: inherit`: none of these workflows declares a secret.
+
+## Self-test and releasing
+`self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
+Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode.
+
+Callers currently use `@main`, so a merge here changes CI and TestFlight in every consumer at once.
+Planned release flow (needs the owner's approval, because tags are shared state):
+1. Change on a branch; prove it on one caller by pointing that caller at the branch ref in a draft PR.
+2. Merge here once self-test and the caller's run are green.
+3. Tag `vX.Y.Z` and move the major tag (`v1`) to it; callers pin `@v1`.
 
 ```yaml
 jobs:
@@ -39,7 +59,6 @@ jobs:
       project: LoopYear.xcodeproj
       scheme: LoopYear
       engine-package: LoopYearEngine
-    secrets: inherit
 ```
 
 This repo is **public**, so private org repos can call its workflows without any Access setting

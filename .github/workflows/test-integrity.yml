@@ -90,7 +90,7 @@ jobs:
 
           merge_base = git("merge-base", base, head).strip()
           test_re = re.compile(
-              r"(^|/)(Tests?|tests?|__tests__|e2e|spec|specs|UITests)/"
+              r"(^|/)([^/]*Tests[^/]*|Test|tests?|__tests__|e2e|specs?)/"
               r"|(^|/)[^/]*(Tests?|Spec)\.swift$"
               r"|\.(test|spec)\.[cm]?[jt]sx?$"
               r"|(^|/)test_[^/]*\.py$|_test\.(py|go)$"

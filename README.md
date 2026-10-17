@@ -21,6 +21,9 @@ jobs:
       test: npm test
       build: npm run build
 ```
+- **`em-dash-check.yml`** - fails when a PR or push adds a line containing an em dash (house style).
+  Diff-only, so old text never blocks new work. Input: `exclude` (git pathspec globs, one per line).
+  Used by plan-bee, website, koinori-web and ops; the iOS apps get the check from `ios-ci.yml`.
 - **`ios-ci.yml`** - CI for the quick iOS apps (`workflow_call`): XcodeGen project check, no em
   dashes, engine package tests, app tests on the simulator, on the caller's self-hosted Mac runner.
   Inputs: `project`, `scheme`, `engine-package`, optional `simulator`, `runs-on`, `timeout-minutes`.

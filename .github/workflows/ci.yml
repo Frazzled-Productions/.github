@@ -5,7 +5,7 @@ name: CI (reusable)
 #
 #   jobs:
 #     ci:
-#       uses: Frazzled-Productions/.github/.github/workflows/ci.yml@main
+#       uses: Frazzled-Productions/.github/.github/workflows/ci.yml@v1
 #       with:
 #         node-version: '24'
 #         lint: npm run lint

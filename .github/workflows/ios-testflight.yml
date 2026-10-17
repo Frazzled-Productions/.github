@@ -22,7 +22,7 @@ name: iOS TestFlight upload (reusable)
 #     upload:
 #       needs: gate
 #       if: needs.gate.outputs.upload == 'true'
-#       uses: Frazzled-Productions/.github/.github/workflows/ios-testflight.yml@main
+#       uses: Frazzled-Productions/.github/.github/workflows/ios-testflight.yml@v1
 #       with:
 #         engine-package: LoopYearEngine
 #         secrets-xcconfig: ${{ vars.SECRETS_XCCONFIG || '/Users/fraser/.config/loop-year/Secrets.xcconfig' }}

@@ -9,7 +9,7 @@ name: Em-dash check (reusable)
 #       branches: [main]
 #   jobs:
 #     em-dash:
-#       uses: Frazzled-Productions/.github/.github/workflows/em-dash-check.yml@main
+#       uses: Frazzled-Productions/.github/.github/workflows/em-dash-check.yml@v1
 #       with:
 #         exclude: |
 #           docs/research/**

@@ -29,6 +29,9 @@ jobs:
   Release RevenueCat key copied in and removed afterwards, the app's own `tools/release/testflight.sh`.
   Inputs: `engine-package`, `secrets-xcconfig`, `asc-key-id`, `asc-issuer-id`, optional
   `release-script`, `runs-on`, `timeout-minutes`. Consumer snippets are in each file's header.
+- **`secret-scan.yml`** - gitleaks over the caller's full history (`workflow_call`), pinned by version
+  and checksum. Lifted from koinori's own `secret-scan.yml`. Free alternative to GitHub secret
+  scanning on private repos. Inputs: optional `gitleaks-version`, `gitleaks-sha256`, `runs-on`.
 
 ```yaml
 jobs:

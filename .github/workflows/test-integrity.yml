@@ -6,6 +6,7 @@ name: Test integrity (reusable)
 #     test.fixme, xit(, xdescribe(, pytest skip;
 #   - changed (modified or deleted) snapshot or visual baselines;
 #   - changed numeric thresholds (coverage, budgets, tolerances) in test or config files, old -> new.
+# OpenSpec files (openspec/**, including its specs/ folders) are never counted as tests.
 # Lists them in one sticky PR comment and fails unless the PR body has a "## Test changes" section
 # that names each flagged file. Assertion changes are deliberately not parsed (too noisy).
 # Process rule: ops/standards/process.md (weakening a test check to reach green must be justified).
@@ -111,12 +112,15 @@ jobs:
           )
           num_re = re.compile(r"-?\d+(\.\d+)?")
           ignored = re.compile(r"\.md$|^\.github/")
+          # OpenSpec specs and change deltas (openspec/**/spec.md) are product specs, not tests:
+          # archiving a change deletes its delta files, which must not count as deleted tests.
+          not_tests = re.compile(r"^openspec/")
           config_re = re.compile(r"(config|budget|threshold|coverage|codecov|lighthouse|perf)[^/]*$|\.(json|ya?ml|toml)$", re.I)
 
           findings = []  # (kind, path, detail)
           for line in git("diff", "--name-status", "--no-renames", merge_base, head).splitlines():
               status, path = line.split("\t", 1)
-              if status == "D" and test_re.search(path) and not snap_re.search(path):
+              if status == "D" and test_re.search(path) and not snap_re.search(path) and not not_tests.search(path):
                   findings.append(("Deleted test file", path, ""))
               if status in ("M", "D") and snap_re.search(path):
                   findings.append(("Changed snapshot or baseline", path, "deleted" if status == "D" else "modified"))
@@ -135,7 +139,7 @@ jobs:
                   continue
               if line.startswith("@@") or path is None or ignored.search(path):
                   continue
-              is_test = bool(test_re.search(path))
+              is_test = bool(test_re.search(path)) and not not_tests.search(path)
               watch_thresholds = is_test or bool(config_re.search(path))
               text = line[1:]
               if line.startswith("-") and watch_thresholds and threshold_re.search(text) and num_re.search(text):

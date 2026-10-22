@@ -28,6 +28,10 @@ name: Test integrity (reusable)
 #         warn-only: false
 #
 # "edited" matters: adding the justification to the PR body re-runs the check.
+#
+# A PR opened by GITHUB_TOKEN (a bot PR) starts no pull_request workflow. To check one, give the
+# caller a workflow_dispatch trigger with a pr-number input, pass it on as `pr-number`, and dispatch
+# on the PR's branch: the check runs on the PR's head commit under the same check name.
 
 on:
   workflow_call:
@@ -48,6 +52,12 @@ on:
         description: Extra Python regex (matched against the path) for snapshot or baseline files.
         type: string
         default: ''
+      pr-number:
+        description: >-
+          For a workflow_dispatch run on a PR's branch (a PR opened by GITHUB_TOKEN triggers no
+          pull_request workflows): the PR to check. Its head must be the dispatched commit.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -55,7 +65,7 @@ permissions:
 jobs:
   test-integrity:
     name: Test integrity
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || inputs.pr-number != ''
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:
@@ -72,18 +82,29 @@ jobs:
           WARN_ONLY: ${{ inputs.warn-only }}
           EXTRA_TEST_PATTERN: ${{ inputs.extra-test-pattern }}
           EXTRA_SNAPSHOT_PATTERN: ${{ inputs.extra-snapshot-pattern }}
+          PR_NUMBER: ${{ inputs.pr-number }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess, sys, urllib.request
 
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          pr = event["pull_request"]
-          base, head, number = pr["base"]["sha"], pr["head"]["sha"], pr["number"]
-          body = pr.get("body") or ""
           warn_only = os.environ.get("WARN_ONLY") == "true"
           repo = os.environ["GITHUB_REPOSITORY"]
           api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          pr = event.get("pull_request")
+          if pr is None:  # workflow_dispatch with pr-number: read the PR, and check the dispatched commit is its head
+              number = int(os.environ["PR_NUMBER"])
+              req = urllib.request.Request(f"{api}/repos/{repo}/pulls/{number}", headers={
+                  "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(req) as r:
+                  pr = json.loads(r.read())
+              if pr["head"]["sha"] != os.environ["GITHUB_SHA"]:
+                  print(f"::error::PR #{number} head is {pr['head']['sha'][:7]}, but this run checked out "
+                        f"{os.environ['GITHUB_SHA'][:7]}. Dispatch on the PR's branch at its head.")
+                  sys.exit(1)
+          base, head, number = pr["base"]["sha"], pr["head"]["sha"], pr["number"]
+          body = pr.get("body") or ""
           marker = "<!-- test-integrity -->"
 
           def git(*args):

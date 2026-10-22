@@ -40,7 +40,8 @@ jobs:
   `.disabled(`, `.skip(`, `.only(`, `test.fixme`), changed snapshot or visual baselines and changed
   thresholds, in one sticky PR comment, and fails unless the PR body has a `## Test changes` section
   naming each flagged file. Inputs: `warn-only` (pass with warnings, for a trial period), `runs-on`,
-  `extra-test-pattern`, `extra-snapshot-pattern`. The caller needs `pull-requests: write` and the
+  `extra-test-pattern`, `extra-snapshot-pattern`, `pr-number` (check a bot PR from a
+  `workflow_dispatch` run on its branch). OpenSpec files (`openspec/**`) never count as tests. The caller needs `pull-requests: write` and the
   `edited` PR event type, so fixing the PR body re-runs it. Snippet in the file header.
 - **`secret-scan.yml`** - gitleaks over the caller's full history (`workflow_call`), pinned by version
   and checksum. Lifted from koinori's own `secret-scan.yml`. Free alternative to GitHub secret

@@ -6,6 +6,7 @@ name: Test integrity (reusable)
 #     test.fixme, xit(, xdescribe(, pytest skip;
 #   - changed (modified or deleted) snapshot or visual baselines;
 #   - changed numeric thresholds (coverage, budgets, tolerances) in test or config files, old -> new.
+# OpenSpec files (openspec/**, including its specs/ folders) are never counted as tests.
 # Lists them in one sticky PR comment and fails unless the PR body has a "## Test changes" section
 # that names each flagged file. Assertion changes are deliberately not parsed (too noisy).
 # Process rule: ops/standards/process.md (weakening a test check to reach green must be justified).
@@ -27,6 +28,10 @@ name: Test integrity (reusable)
 #         warn-only: false
 #
 # "edited" matters: adding the justification to the PR body re-runs the check.
+#
+# A PR opened by GITHUB_TOKEN (a bot PR) starts no pull_request workflow. To check one, give the
+# caller a workflow_dispatch trigger with a pr-number input, pass it on as `pr-number`, and dispatch
+# on the PR's branch: the check runs on the PR's head commit under the same check name.
 
 on:
   workflow_call:
@@ -47,6 +52,12 @@ on:
         description: Extra Python regex (matched against the path) for snapshot or baseline files.
         type: string
         default: ''
+      pr-number:
+        description: >-
+          For a workflow_dispatch run on a PR's branch (a PR opened by GITHUB_TOKEN triggers no
+          pull_request workflows): the PR to check. Its head must be the dispatched commit.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -54,7 +65,7 @@ permissions:
 jobs:
   test-integrity:
     name: Test integrity
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || inputs.pr-number != ''
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
     permissions:
@@ -71,18 +82,29 @@ jobs:
           WARN_ONLY: ${{ inputs.warn-only }}
           EXTRA_TEST_PATTERN: ${{ inputs.extra-test-pattern }}
           EXTRA_SNAPSHOT_PATTERN: ${{ inputs.extra-snapshot-pattern }}
+          PR_NUMBER: ${{ inputs.pr-number }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import json, os, re, subprocess, sys, urllib.request
 
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          pr = event["pull_request"]
-          base, head, number = pr["base"]["sha"], pr["head"]["sha"], pr["number"]
-          body = pr.get("body") or ""
           warn_only = os.environ.get("WARN_ONLY") == "true"
           repo = os.environ["GITHUB_REPOSITORY"]
           api = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          pr = event.get("pull_request")
+          if pr is None:  # workflow_dispatch with pr-number: read the PR, and check the dispatched commit is its head
+              number = int(os.environ["PR_NUMBER"])
+              req = urllib.request.Request(f"{api}/repos/{repo}/pulls/{number}", headers={
+                  "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"], "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(req) as r:
+                  pr = json.loads(r.read())
+              if pr["head"]["sha"] != os.environ["GITHUB_SHA"]:
+                  print(f"::error::PR #{number} head is {pr['head']['sha'][:7]}, but this run checked out "
+                        f"{os.environ['GITHUB_SHA'][:7]}. Dispatch on the PR's branch at its head.")
+                  sys.exit(1)
+          base, head, number = pr["base"]["sha"], pr["head"]["sha"], pr["number"]
+          body = pr.get("body") or ""
           marker = "<!-- test-integrity -->"
 
           def git(*args):
@@ -111,12 +133,15 @@ jobs:
           )
           num_re = re.compile(r"-?\d+(\.\d+)?")
           ignored = re.compile(r"\.md$|^\.github/")
+          # OpenSpec specs and change deltas (openspec/**/spec.md) are product specs, not tests:
+          # archiving a change deletes its delta files, which must not count as deleted tests.
+          not_tests = re.compile(r"^openspec/")
           config_re = re.compile(r"(config|budget|threshold|coverage|codecov|lighthouse|perf)[^/]*$|\.(json|ya?ml|toml)$", re.I)
 
           findings = []  # (kind, path, detail)
           for line in git("diff", "--name-status", "--no-renames", merge_base, head).splitlines():
               status, path = line.split("\t", 1)
-              if status == "D" and test_re.search(path) and not snap_re.search(path):
+              if status == "D" and test_re.search(path) and not snap_re.search(path) and not not_tests.search(path):
                   findings.append(("Deleted test file", path, ""))
               if status in ("M", "D") and snap_re.search(path):
                   findings.append(("Changed snapshot or baseline", path, "deleted" if status == "D" else "modified"))
@@ -135,7 +160,7 @@ jobs:
                   continue
               if line.startswith("@@") or path is None or ignored.search(path):
                   continue
-              is_test = bool(test_re.search(path))
+              is_test = bool(test_re.search(path)) and not not_tests.search(path)
               watch_thresholds = is_test or bool(config_re.search(path))
               text = line[1:]
               if line.startswith("-") and watch_thresholds and threshold_re.search(text) and num_re.search(text):

@@ -1,0 +1,271 @@
+name: OpenSpec archive (reusable)
+
+# Archives every OpenSpec change on the caller's base branch into its main specs once the change's PR
+# has merged (owner decision 22 October 2026; OpenSpec's docs/team-workflow.md recommends archiving
+# after merge). Moved here from roast-conductor (owner decision 23 October 2026) so every app repo
+# adopts it with a short caller. Proposals live on branches, so any active change found on the base
+# branch (openspec/changes/<name>, not under archive/) has merged.
+#
+# The Python and shell tools come from this repository at the commit this workflow runs from
+# (job.workflow_sha: the SHA or tag the caller pins), fetched into the runner's temp folder. They
+# never come from the caller's tree, so a change in the caller cannot alter the guards it is judged by.
+#
+# archive job (caller's push to the base branch touching openspec/changes, or "Run workflow"):
+#   1. From a fresh fetch of the base branch, on the archive branch, archive each active change in
+#      name order with `openspec archive <name> --yes`, check the result (tools/openspec/archive.py:
+#      no "TBD - created" Purpose, `openspec validate --specs --strict`, no em dash in openspec/,
+#      nothing outside openspec/ touched) and commit it as "Archive OpenSpec change <name> into the
+#      main specs".
+#   2. Push the branch (re-fetching and rebuilding once if the push is refused) and open, or reuse,
+#      the PR into the base branch.
+#   3. Approve the PR's own held checks (owner decision 22 October 2026, roast-conductor issue #168).
+#      GitHub holds the pull_request runs on a PR that github-actions[bot] opens ("action required").
+#      tools/openspec/approve_runs.py approves them only when the PR is the bot's own, from the
+#      archive branch in the caller's repository into the base branch, its head is the commit just
+#      pushed, its diff is plain files under openspec/ only, and each run is a held pull_request run
+#      the bot triggered on that commit from the archive branch.
+#   4. Turn on auto-merge (rebase, so each change keeps its own commit) pinned to that head commit:
+#      GitHub merges only once the required checks pass. This job does not wait for them, so it never
+#      holds the runner the checks need.
+#   Before any of this it reads the base branch's rules and stops if they require a check that is not
+#   listed in required-contexts (a check the bot's PR would never get).
+# stuck job (caller's schedule, e.g. every 30 minutes): opens an issue if an archive PR has been open
+# for more than stuck-minutes, with its checks, so a refused approval or a failed check never goes
+# unnoticed.
+#
+# Any failure opens (or comments on) an issue labelled "openspec" with the output; nothing lands.
+# Nothing to archive exits 0. Runs are serialised per repository. The merge is made with
+# GITHUB_TOKEN, so it starts no workflow on the base branch (no CI re-run, no release build). Needs
+# the caller repo's setting "Allow GitHub Actions to create and approve pull requests".
+#
+# Consumer (thin caller in the app repo's .github/workflows/openspec-archive.yml; pin a tag or SHA):
+#
+#   name: OpenSpec archive
+#   on:
+#     push:
+#       branches: [main]
+#       paths: ['openspec/changes/**']
+#     workflow_dispatch:
+#     schedule:
+#       - cron: '*/30 * * * *'
+#   permissions:
+#     contents: read
+#   jobs:
+#     openspec-archive:
+#       name: OpenSpec archive
+#       permissions:
+#         actions: write # approve the archive PR's own held checks
+#         contents: write # push the archive branch
+#         pull-requests: write
+#         issues: write
+#         checks: read # the stuck job lists the PR's checks
+#       uses: Frazzled-Productions/.github/.github/workflows/openspec-archive.yml@v1
+#       with:
+#         required-contexts: |-
+#           Engine and app tests / Engine and app tests
+#           Test integrity / Test integrity
+#
+# The schedule event runs only the stuck job; every other event runs only the archive job.
+
+on:
+  workflow_call:
+    inputs:
+      required-contexts:
+        description: >-
+          The status checks the base branch's ruleset requires, one per line, exactly as GitHub names
+          them. The archive job refuses to go on if the ruleset requires any other.
+        type: string
+        required: true
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string. Needs git, gh, jq, python3 and the openspec CLI.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      archive-branch:
+        description: The branch the bot pushes its archive commits to.
+        type: string
+        default: openspec-archive
+      base-branch:
+        description: The branch changes merge into and the archive PR targets.
+        type: string
+        default: main
+      stuck-minutes:
+        description: How long an archive PR may stay open before the stuck job opens an issue.
+        type: number
+        default: 30
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    name: Archive merged OpenSpec changes
+    if: github.event_name != 'schedule'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 15
+    concurrency:
+      group: openspec-archive-job
+      cancel-in-progress: false
+    permissions:
+      actions: write # approve the archive PR's own held checks
+      contents: write # push the archive branch
+      pull-requests: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OPENSPEC_TELEMETRY: '0'
+      BRANCH: ${{ inputs.archive-branch }}
+      BASE: ${{ inputs.base-branch }}
+      REQUIRED_CONTEXTS: ${{ inputs.required-contexts }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a commit SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          [ "$(git -C "$tools" rev-parse HEAD)" = "$TOOLS_SHA" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          echo "Shared tools: $TOOLS_REPO at $TOOLS_SHA"
+
+      - name: Check the inputs
+        run: |
+          set -euo pipefail
+          for b in "$BRANCH" "$BASE"; do
+            [[ "$b" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "::error::'$b' is not an allowed branch name."; exit 1; }
+          done
+          [ "$BRANCH" != "$BASE" ] || { echo "::error::archive-branch and base-branch must differ."; exit 1; }
+          [ -n "$(sed '/^[[:space:]]*$/d' <<< "$REQUIRED_CONTEXTS")" ] || { echo "::error::required-contexts is empty."; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.base-branch }}
+          fetch-depth: 0
+          persist-credentials: true # the job pushes the archive branch
+
+      - name: Archive, open the PR and start its checks
+        run: |
+          set +e -uo pipefail
+          TOOLS="$RUNNER_TEMP/frazzled-openspec-tools"
+          # shellcheck disable=SC1091 # fetched at run time
+          source "$TOOLS/tools/openspec/report-failure.sh"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config commit.gpgsign false
+
+          # The ruleset must not require anything this workflow does not start.
+          if ! rules=$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/$BASE" 2>> "$LOG"); then
+            fail "all changes" "Could not read $BASE's rules, so cannot confirm which checks it requires."
+          fi
+          if ! required=$(jq -r '.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' <<< "$rules" | sort -u); then
+            fail "all changes" "Could not parse $BASE's rules."
+          fi
+          unknown=$(comm -23 <(printf '%s\n' "$required") <(printf '%s\n' "$REQUIRED_CONTEXTS" | sort -u) | sed '/^$/d')
+          [ -z "$unknown" ] || fail "all changes" "$BASE's ruleset requires checks this workflow does not start: $unknown. Update required-contexts in the caller workflow."
+
+          build() { # archive every active change on a fresh branch from the latest base; prints nothing on success
+            if ! { git fetch --quiet origin "$BASE" && git checkout --quiet -B "$BRANCH" "origin/$BASE"; }; then fail "all changes" "Could not fetch $BASE."; fi
+            local name
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              # OpenSpec change names are kebab-case; anything else is refused rather than used in commands.
+              [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "unexpected change folder" "openspec/changes has a folder named '$name', which is not a kebab-case change name."
+              python3 "$TOOLS/tools/openspec/archive.py" archive "$name" >> "$LOG" 2>&1 || fail "$name" "Archiving or the checks failed (output below)."
+              if ! { git add -A openspec && git commit --quiet -m "Archive OpenSpec change $name into the main specs"; }; then fail "$name" "Could not commit the archive."; fi
+            done < <(python3 "$TOOLS/tools/openspec/archive.py" list)
+            # Judged from git's raw diff with renames split, so nothing outside openspec/ and no symlink slips in.
+            if [ -n "$(git rev-list "origin/$BASE..HEAD")" ] && ! python3 "$TOOLS/tools/ci/changed_files.py" openspec "origin/$BASE..HEAD" >> "$LOG" 2>&1; then
+              fail "all changes" "The archive commits change something other than plain files under openspec/ (output below)."
+            fi
+          }
+
+          build
+          names=$(git log --reverse --format=%s "origin/$BASE..HEAD" | sed -E 's/^Archive OpenSpec change (.*) into the main specs$/\1/')
+          if [ -z "$names" ]; then echo "Nothing to archive."; exit 0; fi
+          label=$(paste -sd ',' - <<< "$names" | sed 's/,/, /g')
+
+          if ! git push --quiet --force origin "HEAD:refs/heads/$BRANCH" >> "$LOG" 2>&1; then
+            echo "Push refused; rebuilding once from the latest $BASE." | tee -a "$LOG"
+            build
+            git push --quiet --force origin "HEAD:refs/heads/$BRANCH" >> "$LOG" 2>&1 || fail "$label" "Could not push $BRANCH."
+          fi
+          sha=$(git rev-parse HEAD)
+
+          if [ "$(wc -l <<< "$names" | tr -d ' ')" = 1 ]; then title="Archive OpenSpec change $names into the main specs"
+          else title="Archive OpenSpec changes $label into the main specs"; fi
+          body="Archived automatically after these OpenSpec changes merged: $label (\`openspec archive <name> --yes\`, one commit each). Only openspec/ changes. The bot approves this PR's own held checks; GitHub merges once the required checks pass. Run: $RUN_URL"
+          pr=$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$title" --body "$body" >> "$LOG" 2>&1
+          else
+            url=$(gh pr create --base "$BASE" --head "$BRANCH" --title "$title" --body "$body" 2>> "$LOG") \
+              || fail "$label" "Could not open the archive PR. If the output says GitHub Actions is not permitted to create pull requests, turn on Settings > Actions > General > \"Allow GitHub Actions to create and approve pull requests\"."
+            pr=${url##*/}
+          fi
+
+          python3 "$TOOLS/tools/openspec/approve_runs.py" "$GITHUB_REPOSITORY" "$pr" "$sha" --branch "$BRANCH" --base "$BASE" 2>&1 | tee -a "$LOG"
+          [ "${PIPESTATUS[0]}" = 0 ] || fail "$label" "Could not approve the archive PR #$pr's own held checks (output below)."
+          gh pr merge "$pr" --auto --rebase --match-head-commit "$sha" >> "$LOG" 2>&1 || fail "$label" "Could not turn on auto-merge for #$pr."
+          echo "Opened #$pr for $label at ${sha::7}; its checks are approved and running; it merges when they pass."
+
+  stuck:
+    name: Check for a stuck archive PR
+    if: github.event_name == 'schedule'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    concurrency:
+      group: openspec-archive-stuck-job
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ inputs.archive-branch }}
+      BASE: ${{ inputs.base-branch }}
+      STUCK_MINUTES: ${{ inputs.stuck-minutes }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a commit SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          [ "$(git -C "$tools" rev-parse HEAD)" = "$TOOLS_SHA" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+
+      - name: Archive PR open too long
+        run: |
+          set +e -uo pipefail
+          # shellcheck disable=SC1091 # fetched at run time
+          source "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/report-failure.sh"
+          read -r pr sha created < <(gh pr list --head "$BRANCH" --base "$BASE" --state open --limit 1 \
+            --json number,headRefOid,createdAt --jq '.[0] | "\(.number) \(.headRefOid) \(.createdAt)"')
+          if [ -z "${pr:-}" ] || [ "$pr" = null ]; then echo "No open archive PR."; exit 0; fi
+          age=$(python3 -c 'import sys, datetime as d; print(int((d.datetime.now(d.timezone.utc) - d.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))).total_seconds()))' "$created")
+          if [ "$age" -lt "$((STUCK_MINUTES * 60))" ]; then echo "#$pr has been open $((age / 60)) minutes."; exit 0; fi
+          gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" \
+            --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"' >> "$LOG" 2>&1
+          gh pr view "$pr" --json mergeStateStatus,autoMergeRequest >> "$LOG" 2>&1
+          fail "#$pr" "The archive PR #$pr has been open for $((age / 60)) minutes without merging. Its checks are below; a held check needs approving in the PR's Checks tab, a failed one needs fixing."

@@ -47,11 +47,51 @@ jobs:
   and checksum. Lifted from koinori's own `secret-scan.yml`. Free alternative to GitHub secret
   scanning on private repos. Inputs: optional `gitleaks-version`, `gitleaks-sha256`, `runs-on`.
 
+### OpenSpec tooling
+Moved here from roast-conductor (owner decision 23 October 2026, `ops/research/openspec-trial-2026-10-21.md`,
+"Review after Roast Conductor 1.0") so each app repo adopts OpenSpec with short callers. Every one of
+these fetches its Python and shell tools from **this repository at the commit the workflow runs from**
+(`job.workflow_sha`, the tag or SHA the caller pins) into the runner's temp folder, never from the
+caller's tree, so a PR cannot change the guard it is judged by. The tools and their tests live in
+`tools/openspec/` and `tools/ci/`; `self-test.yml` runs the tests on every PR here. Runner default:
+`["self-hosted", "macOS", "ARM64"]` (git, gh, jq, python3 and the Homebrew `openspec` CLI), so no paid
+GitHub-hosted minutes. Snippets are in each file's header.
+- **`openspec-archive.yml`** - the archive bot. On the caller's push to the base branch (or "Run
+  workflow") it archives each merged change with `openspec archive <name> --yes`, checks the result
+  (`tools/openspec/archive.py`), pushes the archive branch, opens the PR, approves that PR's own held
+  checks (`tools/openspec/approve_runs.py`: only the bot's own PR, from the archive branch into the base
+  branch in the same repository, at the commit just pushed, with only plain files under `openspec/`
+  changed, and only held `pull_request` runs the bot triggered) and turns on auto-merge. It first stops
+  if the base branch's ruleset requires a check not in `required-contexts`. On the caller's `schedule`
+  it instead runs the stuck job: an issue when an archive PR has been open longer than `stuck-minutes`.
+  Failures open or comment on an issue labelled `openspec`. Inputs: `required-contexts` (required, one
+  per line), optional `runs-on`, `archive-branch` (default `openspec-archive`), `base-branch` (`main`),
+  `stuck-minutes` (30). The caller job grants `actions: write`, `contents: write`,
+  `pull-requests: write`, `issues: write`, `checks: read`; the repo needs "Allow GitHub Actions to
+  create and approve pull requests".
+- **`openspec-overlap.yml`** - on a PR: `openspec validate --strict` on each change it adds or edits,
+  then fails if another open PR's delta MODIFIES, REMOVES or RENAMES the same requirement, or a target is
+  no longer on the base branch (`tools/openspec/overlap.py`). Inputs: optional `runs-on`, `base-branch`.
+  The caller job grants `contents: read`, `pull-requests: read`.
+- **`openspec-changed-files.yml`** - output `docs-only`: `'true'` when every changed file is a plain file
+  under `openspec/`, or Markdown at the root, in `docs/` or in `.claude/`, with deletions only under
+  `openspec/` (`tools/ci/changed_files.py`; judged from git, renames split). Inputs: optional `runs-on`,
+  `base-branch` (what a `workflow_dispatch` run is compared with).
+- **`openspec-docs-check.yml`** - the quick real check a docs-only change gets instead of the full
+  build: the archive checks, strict validation of active changes and Markdown sanity. Inputs:
+  `job-name` (so it can report under the caller's required check name), optional `runs-on`.
+
+A caller on `pull_request` runs the workflow file from the PR's own merge commit, so a PR could still
+repoint its caller at another ref; the required checks and review catch that, as for any workflow
+edit. The push and schedule callers (the archive bot) always run from the base branch.
+
 Callers need no `secrets: inherit`: none of these workflows declares a secret.
 
 ## Self-test and releasing
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
-Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode.
+Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode, the
+OpenSpec tools' unit tests (with the `openspec` CLI from npm at a pinned version), and the
+`openspec-changed-files` and `openspec-overlap` workflows against this repo (proving the tools fetch).
 
 `main` is protected by a repo ruleset: changes land by PR only, and `actionlint and zizmor` plus
 `Test integrity / Test integrity` must pass (admins can bypass only through a PR).

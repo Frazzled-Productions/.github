@@ -95,12 +95,16 @@ edit. The push and schedule callers (the archive bot) always run from the base b
 Callers need no `secrets: inherit`: none of these workflows declares a secret.
 
 ## Command centre liveness (not reusable)
-`command-centre-liveness.yml` runs here, not in callers: every 3 hours on GitHub-hosted Ubuntu (free,
-public repo) it reads the `CC_HEARTBEAT_AT` and `CC_NOW_MD_AT` repository variables that the ops stall
-watcher and `now.md` job write from the Mac, and opens one issue mentioning Fraser when either is over
-26 hours old, edits it while the outage lasts, and closes it when both are fresh. Until the Mac has
-written them it does nothing ("not connected yet"). Logic and tests: `tools/liveness/`. Runbook:
-`ops/runbooks/command-centre.md`.
+`command-centre-liveness.yml` runs here, not in callers, on GitHub-hosted Ubuntu (free, public repo). It
+reads the repository variables the Mac writes: `CC_HEARTBEAT_AT` (the ops stall watcher, every run),
+`CC_NOW_MD_AT` (the `now.md` job), `CC_MAC_AWAKE` (the ops Mac trigger, "awake since" and "last tick")
+and `CC_TRIGGER_AT` (the trigger's last tick, relayed by the watcher). It opens one issue mentioning
+Fraser when the watcher is over 30 minutes old while the Mac has been awake for 30 minutes, when the
+trigger is silent while the watcher runs only on the backstop cron, or when any heartbeat is over 26
+hours old; it edits the issue while the outage lasts and closes it when no rule holds. It never alarms
+on a stale watcher while the Mac sleeps, and a variable never written is "not connected". Its cron asks
+for every 3 hours, but GitHub delivers it about every 3 to 5 hours, so it is a coarse alarm. Logic and
+tests: `tools/liveness/`. Runbook: `ops/runbooks/command-centre.md`.
 
 ## Self-test and releasing
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the

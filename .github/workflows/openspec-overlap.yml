@@ -79,8 +79,9 @@ jobs:
           # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
           # Either way it names exactly one commit, and that must be what is checked out.
           want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
-          [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" = "$want" ] && [ "$(git -C "$tools" rev-parse HEAD)" = "$want" ] \
-            || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
           echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

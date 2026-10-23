@@ -1,0 +1,47 @@
+name: Command centre liveness
+
+# Off-Mac liveness check for the ops command centre (ops OpenSpec change command-centre-core, design
+# D6). Every 3 hours on GitHub-hosted Ubuntu (this repo is public, so it uses no paid minutes): reads
+# the CC_HEARTBEAT_AT and CC_NOW_MD_AT repository variables the Mac writes, and opens, updates or
+# closes one issue mentioning Fraser when either is older than 26 hours. Logic and tests:
+# tools/liveness/. A dispatch can pass stale or fresh values to prove the issue opens and closes.
+
+on:
+  schedule:
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+    inputs:
+      heartbeat_at:
+        description: Override CC_HEARTBEAT_AT (epoch seconds), for the self-check only
+        required: false
+      now_md_at:
+        description: Override CC_NOW_MD_AT (epoch seconds), for the self-check only
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: command-centre-liveness
+  cancel-in-progress: false
+
+jobs:
+  liveness:
+    name: Command centre liveness
+    if: github.repository == 'Frazzled-Productions/.github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the heartbeat
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEARTBEAT_AT: ${{ inputs.heartbeat_at || vars.CC_HEARTBEAT_AT }}
+          NOW_MD_AT: ${{ inputs.now_md_at || vars.CC_NOW_MD_AT }}
+        run: python3 tools/liveness/liveness.py

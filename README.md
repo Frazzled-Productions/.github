@@ -91,6 +91,14 @@ edit. The push and schedule callers (the archive bot) always run from the base b
 
 Callers need no `secrets: inherit`: none of these workflows declares a secret.
 
+## Command centre liveness (not reusable)
+`command-centre-liveness.yml` runs here, not in callers: every 3 hours on GitHub-hosted Ubuntu (free,
+public repo) it reads the `CC_HEARTBEAT_AT` and `CC_NOW_MD_AT` repository variables that the ops stall
+watcher and `now.md` job write from the Mac, and opens one issue mentioning Fraser when either is over
+26 hours old, edits it while the outage lasts, and closes it when both are fresh. Until the Mac has
+written them it does nothing ("not connected yet"). Logic and tests: `tools/liveness/`. Runbook:
+`ops/runbooks/command-centre.md`.
+
 ## Self-test and releasing
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
 Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode, the

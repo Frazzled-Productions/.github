@@ -1,0 +1,49 @@
+# path_or_spec<TAB>max_lines   - the ceiling on the instruction surface.
+#
+# Seeded 2026-09-18 with the REAL numbers of the day, so nothing breaks on day one. The point is
+# that these may go DOWN freely and may only go UP deliberately, in the same commit, with a reason.
+# WORKFLOW.md is seeded at its current 947 because splitting it is explicitly OUT of scope for now
+# (the guard pass judged the split the highest-risk change of the 97 audited); the ceiling stops it
+# growing further while that decision is pending.
+#
+# .claude/rules/ is budgeted FROM THE START on purpose: if content moves there from AGENTS.md or
+# WORKFLOW.md without a ceiling on the destination, the move registers as shrinkage that never
+# happened. Only rules WITHOUT paths: frontmatter count, since those are the ones loaded at every
+# session open.
+#
+# Specs: a bare path, GLOB:<pattern> for a summed set, or RULES_UNSCOPED.
+# 144 -> 145 on 2026-09-18: "How we work" gained the session model (/start, /wrap, position is
+# computed, build-log is the archive), which is the first thing a fresh session needs. Paid for by
+# deleting the ReviewLog bullet (now invariant 1 in .claude/rules/constitution.md, loaded
+# unconditionally) and the stale build-log contract pointer. Net +1.
+# 145 -> 157 on 2026-10-23 (owner decision, AskUserQuestion): "Delegated work and the stall watcher"
+# (12 lines) registers background work in the ops task ledger so stalls are caught before Fraser has to
+# ask (ops OpenSpec change command-centre-core). The same paragraph is in roast-conductor and loop-year;
+# keeping it identical here was preferred over a docs/ pointer.
+AGENTS.md	157
+# 947 -> 485 on 2026-09-18: "Multi-agent work" (385 lines) and "Branching" (120) moved to
+# docs/process/, leaving the rules inline and the rationale one click away. Tightened to the new
+# real number so the ratchet keeps its grip; it went 81 -> 947 across 58 commits without ever
+# shrinking once, which is what this line exists to stop happening again.
+# 485 -> 489 on 2026-09-28: DoD item 13 (#1982, ruled by Fraser 2026-09-27: every spec carries an
+# As built table and a promotion cannot close an issue whose clause is unbuilt). A new definition-of-
+# done item is exactly what this file must carry; its rationale went to docs/specs/README.md, the
+# item was compressed to four lines, and the other WORKFLOW.md mentions were cut to one.
+# 489 -> 491 on 2026-10-04: DoD item 14 (#1889, ruled by Fraser 2026-10-04: a new or edited gate is
+# shown failing against its defect). Same reasoning as item 13; compressed to two lines, why in #1889.
+WORKFLOW.md	491
+docs/next.md	40
+RULES_UNSCOPED	70
+# 1299 -> 1305 on 2026-09-18: six verdict-holding agents pinned to `model: opus` (they held a
+# blocking merge verdict while running at whatever model the orchestrator happened to be on), each
+# carrying one line saying why. Compressed from four lines each to one before this raise was taken.
+GLOB:.claude/agents/*.md	1305
+# 699 -> 700 on 2026-09-18: the liquid-glass skill gained one net line correcting a three-month-old
+# contradiction (it told agents to verify Apple APIs against the .json endpoints AGENTS.md forbids).
+# 700 -> 715 on 2026-09-18: dev-session/SKILL.md was reframed from an AUTONOMOUS BATCH RUN to a
+# live co-working session - the bootstrap no longer names a 647KB read set, the four dead github-MCP
+# calls are gone, and the wrap-up points at /wrap and docs/next.md. Compressed twice before this
+# raise was taken; the remaining 15 lines ARE the model change, in the file that is the ritual.
+# 715 -> 710 on 2026-09-29: retro fix A replaced the six-line /dev-session step 12 blockquote with
+# one line pointing at tools/dev/check-session-close.sh. Ratchet tightened to the new size.
+GLOB:.claude/skills/*/SKILL.md	710

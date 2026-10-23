@@ -71,12 +71,13 @@ GitHub-hosted minutes. Snippets are in each file's header.
   change, the bot comments on its own failure issue for it (linking the run and the archive PR) and
   closes it, once auto-merge is on (if a check then fails, the stuck job opens its own issue). Inputs: `required-contexts` (required, one
   per line), optional `runs-on`, `archive-branch` (default `openspec-archive`), `base-branch` (`main`),
-  `stuck-minutes` (30). The caller job grants `actions: write`, `contents: write`,
+  `stuck-minutes` (30), `install-openspec`. The caller job grants `actions: write`, `contents: write`,
   `pull-requests: write`, `issues: write`, `checks: read`; the repo needs "Allow GitHub Actions to
   create and approve pull requests".
 - **`openspec-overlap.yml`** - on a PR: `openspec validate --strict` on each change it adds or edits,
   then fails if another open PR's delta MODIFIES, REMOVES or RENAMES the same requirement, or a target is
-  no longer on the base branch (`tools/openspec/overlap.py`). Inputs: optional `runs-on`, `base-branch`.
+  no longer on the base branch (`tools/openspec/overlap.py`). Inputs: optional `runs-on`, `base-branch`,
+  `install-openspec`.
   The caller job grants `contents: read`, `pull-requests: read`.
 - **`openspec-changed-files.yml`** - output `docs-only`: `'true'` when every changed file is a plain file
   under `openspec/`, or Markdown at the root, in `docs/` or in `.claude/`, with deletions only under
@@ -87,7 +88,34 @@ GitHub-hosted minutes. Snippets are in each file's header.
   its tasks ticked), strict validation of active changes and Markdown sanity. Before moving `v1` to a
   release that adds a check, run it on each caller (`openspec validate --archived` there) so no
   caller's `main` turns red. Inputs:
-  `job-name` (so it can report under the caller's required check name), optional `runs-on`.
+  `job-name` (so it can report under the caller's required check name), optional `runs-on`,
+  `install-openspec`.
+- **`openspec-required.yml`** - "OpenSpec required / OpenSpec required": a PR that changes more than
+  docs must carry an OpenSpec change (`tools/openspec/required.py`). Docs-only PRs pass (the
+  `changed_files.py` docs rule, plus the context budget file), and so do the archive bot's PRs, with no
+  exemption by author or branch. Dependabot PRs pass when they only change dependency manifests, lock
+  files or workflow files. Otherwise the PR must add or edit an active change in
+  `openspec/changes/<name>/` whose head has a delta or `skip_specs: true`; with no `openspec/` at all it
+  fails with "adopt OpenSpec first" and the kit's path (`ops/standards/openspec-adoption/README.md`).
+  The one exception: the `no-spec` label added by `fraserbrookhouse` (from the PR's issue events; fixed
+  in the tool, not an input) plus a `## No spec` section in the PR body, logged in the run and in one PR
+  comment. No `if:` on the job, git, python3 and `gh` only. Inputs: optional `runs-on`, `budget-file`,
+  `warn-only` (honoured only in this repo, for its self-test). The caller runs on `opened, synchronize, reopened, labeled,
+  unlabeled` and grants `contents: read`, `pull-requests: write`, `issues: read`.
+- **`context-budget.yml`** - "Context budget / Context budget": a ceiling on the instruction surface, a
+  port of Koinori's `check-context-budget.sh` (`tools/ci/context_budget.py`). The budget file (input
+  `budget-file`, default `.github/context-budget.txt`) holds `<path or GLOB:pattern or
+  RULES_UNSCOPED><TAB><max lines>`; over budget fails, under only prints a note, a missing file fails
+  with a seed of today's counts. On a PR, a raised entry needs an added `# <old> -> <new> on <date>:
+  <reason>` line directly above it, and a removed one a `# removed <spec>: <reason>` line. No `if:` on
+  the job; git and python3 only. Inputs: optional `runs-on`, `budget-file`.
+
+`install-openspec` (default `false`): when `true`, the archive, overlap and docs-only check workflows
+install `@fission-ai/openspec@1.14.3` from npm (`--ignore-scripts`) first, so a repo without a Mac
+runner can run them with `runs-on: '"ubuntu-latest"'`. Repos with the self-hosted Mac leave it off.
+The adoption kit, with every caller in a Mac and a GitHub-hosted variant and the rollout order (ship,
+add the callers and the archive caller's `required-contexts`, see both report on a PR, then require
+them), is `ops/standards/openspec-adoption/`.
 
 A caller on `pull_request` runs the workflow file from the PR's own merge commit, so a PR could still
 repoint its caller at another ref; the required checks and review catch that, as for any workflow
@@ -111,7 +139,9 @@ tests: `tools/liveness/`. Runbook: `ops/runbooks/command-centre.md`.
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
 Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode, the
 OpenSpec tools' unit tests (with the `openspec` CLI from npm at a pinned version), and the
-`openspec-changed-files` and `openspec-overlap` workflows against this repo (proving the tools fetch).
+`openspec-changed-files`, `openspec-overlap` (through `install-openspec`) and `openspec-required`
+(warn-only, its "adopt OpenSpec first" result checked) workflows against this repo, proving the tools
+fetch. `Context budget` checks this repo's own `.github/context-budget.txt`.
 
 `main` is protected by a repo ruleset: changes land by PR only, and `actionlint and zizmor` plus
 `Test integrity / Test integrity` must pass (admins can bypass only through a PR).

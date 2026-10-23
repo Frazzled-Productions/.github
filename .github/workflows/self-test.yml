@@ -6,7 +6,7 @@ name: Self-test
 #   - zizmor: Actions security audit (template injection, unpinned actions, credentials);
 #   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode;
 #   - OpenSpec tools: the unit tests of tools/ (approve_runs.py guards, archive.py checks,
-#     changed_files.py rules) with the openspec CLI installed from npm at a pinned version;
+#     changed_files.py rules, the command-centre liveness rule) with the openspec CLI installed from npm at a pinned version;
 #   - OpenSpec changed files and overlap: the reusable workflows run against this repo, which proves
 #     they fetch their tools from their own commit (job.workflow_sha). The archive and docs-only
 #     check workflows are exercised by their callers (they need an openspec/ folder and the CLI).
@@ -69,6 +69,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
           python3 -m unittest discover -s tools/openspec -p 'test_*.py' -v
+          python3 -m unittest discover -s tools/liveness -p 'test_*.py' -v
 
   openspec-changed-files:
     name: OpenSpec changed files

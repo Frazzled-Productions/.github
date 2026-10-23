@@ -1,0 +1,107 @@
+name: OpenSpec docs-only check (reusable)
+
+# The quick real check a docs-only change gets instead of the full build (pair it with
+# openspec-changed-files.yml; owner decision 22 October 2026, moved here from roast-conductor on
+# 23 October 2026):
+#   - OpenSpec: the archive checks (tools/openspec/archive.py check: no "TBD - created" Purpose,
+#     `openspec validate --specs --strict`, no em dash in openspec/, no symlink under
+#     openspec/changes), then `openspec validate --changes --strict` when any change is active;
+#   - Markdown sanity: UTF-8, no merge conflict markers, no em dashes in any file.
+# The tools are fetched from this repository at the commit this workflow runs from.
+#
+# It reports under the caller's required check name. GitHub names a reusable workflow's check
+# "<caller job name> / <this job's name>", and this job's name is the `job-name` input, so for a
+# required check "Engine and app tests / Engine and app tests":
+#
+#   jobs:
+#     docs:
+#       # The name changes when skipped, so a skipped job can never stand in for the required check.
+#       name: ${{ needs.changes.outputs.docs-only == 'true' && 'Engine and app tests' || 'Docs-only check (not needed)' }}
+#       needs: changes
+#       if: needs.changes.outputs.docs-only == 'true'
+#       uses: Frazzled-Productions/.github/.github/workflows/openspec-docs-check.yml@v1
+#       with:
+#         job-name: Engine and app tests
+
+on:
+  workflow_call:
+    inputs:
+      job-name:
+        description: This job's name, the second half of the check name the caller's ruleset requires.
+        type: string
+        default: Docs-only check
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string. Needs git, python3 and the openspec CLI.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: ${{ inputs.job-name }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    env:
+      OPENSPEC_TELEMETRY: '0'
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a commit SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          [ "$(git -C "$tools" rev-parse HEAD)" = "$TOOLS_SHA" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          echo "Shared tools: $TOOLS_REPO at $TOOLS_SHA"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: OpenSpec specs and archive checks
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/archive.py"
+          python3 "$archive" check
+          if [ -n "$(python3 "$archive" list)" ]; then
+            openspec validate --changes --strict --no-interactive
+          fi
+
+      # The character is written as chr(0x2014) so this file contains no em dash itself.
+      - name: Markdown sanity
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          bad = []
+          conflict = re.compile(r"^(<<<<<<< |>>>>>>> |=======$)", re.M)
+          for root, dirs, files in os.walk('.'):
+              dirs[:] = [d for d in dirs if d not in ('.git', 'build', '.build')]
+              for name in files:
+                  path = os.path.join(root, name)
+                  try:
+                      text = open(path, encoding='utf-8').read()
+                  except UnicodeDecodeError:
+                      if name.endswith('.md'):
+                          bad.append(f'{path}: not UTF-8')
+                      continue
+                  except OSError:
+                      continue
+                  if chr(0x2014) in text:
+                      bad.append(f'{path}: em dash (house style bans them)')
+                  if name.endswith('.md') and conflict.search(text):
+                      bad.append(f'{path}: merge conflict marker')
+          for b in bad:
+              print(f'::error::{b}')
+          sys.exit(1 if bad else 0)
+          PY

@@ -4,7 +4,12 @@ name: Self-test
 # self-hosted Mac runner: this repo is public, so anyone could open a PR that runs on it).
 #   - actionlint: syntax, expressions, shellcheck of run scripts;
 #   - zizmor: Actions security audit (template injection, unpinned actions, credentials);
-#   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode.
+#   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode;
+#   - OpenSpec tools: the unit tests of tools/ (approve_runs.py guards, archive.py checks,
+#     changed_files.py rules) with the openspec CLI installed from npm at a pinned version;
+#   - OpenSpec changed files and overlap: the reusable workflows run against this repo, which proves
+#     they fetch their tools from their own commit (job.workflow_sha). The archive and docs-only
+#     check workflows are exercised by their callers (they need an openspec/ folder and the CLI).
 
 on:
   pull_request:
@@ -43,3 +48,53 @@ jobs:
     uses: ./.github/workflows/test-integrity.yml # zizmor: ignore[self-repository]
     with:
       warn-only: true
+
+  openspec-tools:
+    name: OpenSpec tools tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OPENSPEC_TELEMETRY: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Install the openspec CLI
+        # Exact version, no install scripts; a test-only tool on a throwaway runner.
+        run: npm install --global --ignore-scripts @fission-ai/openspec@1.14.3 # zizmor: ignore[adhoc-packages]
+      - name: Unit tests
+        run: |
+          python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
+          python3 -m unittest discover -s tools/openspec -p 'test_*.py' -v
+
+  openspec-changed-files:
+    name: OpenSpec changed files
+    uses: ./.github/workflows/openspec-changed-files.yml # zizmor: ignore[self-repository]
+    with:
+      runs-on: '"ubuntu-latest"'
+
+  openspec-changed-files-result:
+    name: OpenSpec changed files result
+    needs: openspec-changed-files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Output is true or false
+        env:
+          DOCS_ONLY: ${{ needs.openspec-changed-files.outputs.docs-only }}
+        run: |
+          echo "docs-only=$DOCS_ONLY"
+          [ "$DOCS_ONLY" = true ] || [ "$DOCS_ONLY" = false ]
+
+  openspec-overlap:
+    name: OpenSpec overlap
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/openspec-overlap.yml # zizmor: ignore[self-repository]
+    with:
+      runs-on: '"ubuntu-latest"'

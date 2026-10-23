@@ -1,0 +1,100 @@
+name: OpenSpec changed files (reusable)
+
+# Decides from git, never from anything a PR author sets, whether a change is docs-only, so the
+# caller's CI can take a quick real check instead of the full build (owner decision 22 October 2026,
+# moved here from roast-conductor on 23 October 2026). Output `docs-only` is 'true' when every changed
+# file is a plain file (mode 100644: no symlinks, executables or submodules) added or modified under
+# openspec/, or Markdown at the repo root, in docs/ or in .claude/, with deletions only under
+# openspec/; renames count as a deletion plus an addition. Anything else, an empty diff or a git
+# failure gives 'false' (run the full build). Rules and tests: tools/ci/changed_files.py, fetched from
+# this repository at the commit this workflow runs from, never from the caller's tree.
+#
+# The range: the PR's base...head, the pushed before..after (a new branch gives no range, so the full
+# build), or origin/<base-branch>...HEAD for a workflow_dispatch run (how a bot PR gets checked).
+#
+# Consumer (in the app repo's CI; pair it with openspec-docs-check.yml):
+#
+#   jobs:
+#     changes:
+#       name: Changed files
+#       uses: Frazzled-Productions/.github/.github/workflows/openspec-changed-files.yml@v1
+#     test:
+#       name: ${{ needs.changes.outputs.docs-only == 'false' && 'Engine and app tests' || 'Full build (not needed)' }}
+#       needs: changes
+#       if: needs.changes.outputs.docs-only == 'false'
+#       uses: Frazzled-Productions/.github/.github/workflows/ios-ci.yml@v1
+#       ...
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string. Needs git and python3.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      base-branch:
+        description: The branch a workflow_dispatch run is compared with.
+        type: string
+        default: main
+    outputs:
+      docs-only:
+        description: "'true' when only openspec/ and docs Markdown changed, else 'false'."
+        value: ${{ jobs.classify.outputs.docs-only }}
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    name: Changed files
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a commit SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          [ "$(git -C "$tools" rev-parse HEAD)" = "$TOOLS_SHA" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          echo "Shared tools: $TOOLS_REPO at $TOOLS_SHA"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+          BASE: ${{ inputs.base-branch }}
+        run: |
+          set -uo pipefail
+          case "$EVENT_NAME" in
+            pull_request) range="$PR_BASE...$PR_HEAD" ;;
+            push) range="$PUSH_BEFORE..$PUSH_AFTER"; [[ "$PUSH_BEFORE" =~ ^0+$ ]] && range="" ;;
+            workflow_dispatch) range="origin/$BASE...HEAD"; [[ "$BASE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || range="" ;;
+            *) range="" ;;
+          esac
+          echo "Changed files ($EVENT_NAME, ${range:-no range}):"
+          if [ -n "$range" ] && python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/ci/changed_files.py" docs "$range"; then
+            echo "docs-only=true" >> "$GITHUB_OUTPUT"; echo "Only openspec/ and Markdown changed: fast check."
+          else
+            echo "docs-only=false" >> "$GITHUB_OUTPUT"; echo "Full build."
+          fi

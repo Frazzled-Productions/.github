@@ -51,7 +51,8 @@ jobs:
 Moved here from roast-conductor (owner decision 23 October 2026, `ops/research/openspec-trial-2026-10-21.md`,
 "Review after Roast Conductor 1.0") so each app repo adopts OpenSpec with short callers. Every one of
 these fetches its Python and shell tools from **this repository at the commit the workflow runs from**
-(`job.workflow_sha`, the tag or SHA the caller pins) into the runner's temp folder, never from the
+(`job.workflow_sha`, the tag or SHA the caller pins; an annotated tag is resolved to its commit) into
+the runner's temp folder, never from the
 caller's tree, so a PR cannot change the guard it is judged by. The tools and their tests live in
 `tools/openspec/` and `tools/ci/`; `self-test.yml` runs the tests on every PR here. Runner default:
 `["self-hosted", "macOS", "ARM64"]` (git, gh, jq, python3 and the Homebrew `openspec` CLI), so no paid
@@ -78,7 +79,10 @@ GitHub-hosted minutes. Snippets are in each file's header.
   `openspec/` (`tools/ci/changed_files.py`; judged from git, renames split). Inputs: optional `runs-on`,
   `base-branch` (what a `workflow_dispatch` run is compared with).
 - **`openspec-docs-check.yml`** - the quick real check a docs-only change gets instead of the full
-  build: the archive checks, strict validation of active changes and Markdown sanity. Inputs:
+  build: the archive checks (including `openspec validate --archived`: every archived change has all
+  its tasks ticked), strict validation of active changes and Markdown sanity. Before moving `v1` to a
+  release that adds a check, run it on each caller (`openspec validate --archived` there) so no
+  caller's `main` turns red. Inputs:
   `job-name` (so it can report under the caller's required check name), optional `runs-on`.
 
 A caller on `pull_request` runs the workflow file from the PR's own merge commit, so a PR could still
@@ -101,8 +105,12 @@ Callers pin the moving major tag `@v1`, so a merge to main changes nothing in co
 tag moves. `v1.0.0` (2026-10-17) is the first release.
 1. Change on a branch; prove it on one caller by pointing that caller at the branch ref in a draft PR.
 2. Merge here once self-test and the caller's run are green.
-3. Tag the new main head `vX.Y.Z` (annotated), then move `v1` to it:
-   `git tag -a v1.0.1 -m "..." && git tag -f -a v1 -m "v1: now v1.0.1" v1.0.1 && git push origin v1.0.1 && git push -f origin v1`.
+3. Tag the new main head `vX.Y.Z` (annotated), then move `v1` to its commit:
+   `git tag -a v1.0.1 -m "..." && git tag -f v1 v1.0.1^{} && git push origin v1.0.1 && git push -f origin v1`.
+   `v1` may be lightweight (as above) or annotated: for an annotated tag GitHub gives
+   `job.workflow_sha` as the tag object, and the OpenSpec workflows' tools fetch resolves it to its
+   commit (from v1.2.0; v1.1.0's fetch refuses it). Always point `v1` at the commit (`^{}`), never at
+   another tag.
 4. A breaking change (renamed or removed input, new required secret) gets a new major tag (`v2`) and
    a PR in each caller; `v1` stays where it is.
 

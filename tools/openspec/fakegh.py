@@ -5,7 +5,11 @@ list per line in tmp/gh-calls.jsonl) and answers from environment variables:
   FAKE_GH_ISSUES  the JSON printed for `gh issue list` (default "[]")
   FAKE_GH_FAIL    calls whose joined arguments contain this text exit 1
   FAKE_GH_CHATTER a line printed before the URL of `gh issue create` or `gh issue comment`
-`gh issue create` prints a new issue URL, `gh issue comment N` a comment URL; the rest print nothing.
+  FAKE_GH_API     a JSON object mapping a `gh api` path to the JSON it answers (a GET of a path not
+                  in it exits 1 with HTTP 404); with `--jq '.[] | tojson'` a list answer is printed
+                  one element per line, as gh prints it
+`gh issue create` prints a new issue URL, `gh issue comment N` a comment URL; `gh api` with
+`-X POST` or `-X PATCH` prints {}; the rest print nothing.
 """
 import json
 import os
@@ -33,6 +37,32 @@ elif args[:2] == ["issue", "comment"]:
     if os.environ.get("FAKE_GH_CHATTER"):
         print(os.environ["FAKE_GH_CHATTER"], file=sys.stderr)
     print("https://github.com/Frazzled-Productions/example/issues/" + args[2] + "#issuecomment-1")
+elif args[:1] == ["api"]:
+    method, jq, path, i = "GET", None, None, 1
+    while i < len(args):
+        if args[i] in ("-X", "--method"):
+            method, i = args[i + 1].upper(), i + 2
+        elif args[i] == "--jq":
+            jq, i = args[i + 1], i + 2
+        elif args[i] in ("-f", "-F", "--field", "--raw-field", "-H", "--header"):
+            i += 2
+        elif args[i].startswith("-"):
+            i += 1
+        else:
+            path, i = path or args[i], i + 1
+    if method != "GET":
+        print("{}")
+        sys.exit(0)
+    answers = json.loads(os.environ.get("FAKE_GH_API", "{}"))
+    if path not in answers:
+        print("HTTP 404: Not Found (" + str(path) + ")", file=sys.stderr)
+        sys.exit(1)
+    answer = answers[path]
+    if jq == ".[] | tojson" and isinstance(answer, list):
+        for item in answer:
+            print(json.dumps(item))
+    else:
+        print(json.dumps(answer))
 '''.replace("ISSUE_URL", ISSUE_URL)
 
 

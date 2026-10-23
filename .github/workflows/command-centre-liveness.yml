@@ -1,9 +1,12 @@
 name: Command centre liveness
 
-# Off-Mac liveness check for the ops command centre (ops OpenSpec change command-centre-core, design
-# D6). Every 3 hours on GitHub-hosted Ubuntu (this repo is public, so it uses no paid minutes): reads
-# the CC_HEARTBEAT_AT and CC_NOW_MD_AT repository variables the Mac writes, and opens, updates or
-# closes one issue mentioning Fraser when either is older than 26 hours. Logic and tests:
+# Off-Mac liveness check for the ops command centre (ops OpenSpec changes command-centre-core, design
+# D6, and reliable-watcher-trigger, design D5). On GitHub-hosted Ubuntu (this repo is public, so it
+# uses no paid minutes): reads the CC_HEARTBEAT_AT, CC_NOW_MD_AT, CC_MAC_AWAKE and CC_TRIGGER_AT
+# repository variables the Mac writes, and opens, updates or closes one issue mentioning Fraser when the
+# watcher is over 30 minutes old while the Mac has been awake 30 minutes, the trigger is silent while the
+# watcher runs on the backstop, or any heartbeat is older than 26 hours. The cron asks for every 3 hours
+# but GitHub delivers it about every 3 to 5 hours, so this is a coarse alarm. Logic and tests:
 # tools/liveness/. A dispatch can pass stale or fresh values to prove the issue opens and closes.
 
 on:
@@ -16,6 +19,12 @@ on:
         required: false
       now_md_at:
         description: Override CC_NOW_MD_AT (epoch seconds), for the self-check only
+        required: false
+      mac_awake:
+        description: Override CC_MAC_AWAKE ("<awake_since> <last_tick>", epoch seconds), for the self-check only
+        required: false
+      trigger_at:
+        description: Override CC_TRIGGER_AT (epoch seconds), for the self-check only
         required: false
 
 permissions:
@@ -44,4 +53,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEARTBEAT_AT: ${{ inputs.heartbeat_at || vars.CC_HEARTBEAT_AT }}
           NOW_MD_AT: ${{ inputs.now_md_at || vars.CC_NOW_MD_AT }}
+          MAC_AWAKE: ${{ inputs.mac_awake || vars.CC_MAC_AWAKE }}
+          TRIGGER_AT: ${{ inputs.trigger_at || vars.CC_TRIGGER_AT }}
         run: python3 tools/liveness/liveness.py

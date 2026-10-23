@@ -132,6 +132,13 @@ class CloseResolved(unittest.TestCase):
         self.run_script("add-x")
         self.assertEqual(self.touched(), [])
 
+    def test_a_trailing_newline_is_not_a_name(self):
+        self.env["FAKE_GH_ISSUES"] = json.dumps([issue(1, "add-x\n")])
+        self.run_script("add-x\n")
+        self.assertEqual(self.touched(), [])
+        self.run_script("add-x")
+        self.assertEqual(self.touched(), [])
+
     def test_a_crash_warns_and_exits_0(self):
         self.env["PATH"] = str(self.dir / "no-such-bin")  # no gh at all
         proc = self.run_script("add-x")
@@ -152,7 +159,10 @@ class Wiring(unittest.TestCase):
         self.assertGreater(call, archive_job.index('echo "Nothing to archive."; exit 0'))
         self.assertIn("|| echo \"::warning::", archive_job[call:call + 300])
         self.assertIn('archived+=("$n"); done <<< "$names"', archive_job)
-        self.assertNotIn("close_resolved.py", text[text.index("  stuck:"):])
+        stuck = text[text.index("  stuck:"):]
+        self.assertNotIn("close_resolved.py", stuck)
+        # The stuck job lists the checks last, so they are in the "Why" block's last 20 lines.
+        self.assertLess(stuck.index('gh pr view "$pr" --json mergeStateStatus'), stuck.index("/check-runs?per_page=100"))
 
 
 if __name__ == "__main__":

@@ -163,8 +163,8 @@ class Reporter(unittest.TestCase):
         (bad / "python3").write_text("#!/bin/sh\nexit 1\n")
         (bad / "python3").chmod(0o755)
         self.env["PATH"] = f"{bad}{os.pathsep}{self.env['PATH']}"
-        block = self.tail_block(self.report("add-x", "Could not push\nto main.", "PROBLEM: push refused\n"))
-        self.assertIn("::error::Could not push%0Ato main.", block)
+        block = self.tail_block(self.report("add-x", "Could not push\r\nto 100% of main.", "PROBLEM: push refused\n"))
+        self.assertIn("::error::Could not push%0D%0Ato 100%25 of main.", block)
         self.assertEqual(block[-1], NOTE)
 
 

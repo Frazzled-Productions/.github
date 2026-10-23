@@ -29,13 +29,20 @@ name: OpenSpec archive (reusable)
 #   4. Turn on auto-merge (rebase, so each change keeps its own commit) pinned to that head commit:
 #      GitHub merges only once the required checks pass. This job does not wait for them, so it never
 #      holds the runner the checks need.
+#   5. Close the bot's own open "OpenSpec archive failed: <name>" issues for the changes this run
+#      archived, with a comment linking the run and the PR (tools/openspec/close_resolved.py). Issues
+#      for other changes, people's issues and the bot's "all changes", "unexpected change folder" and
+#      stuck-PR issues stay open.
 #   Before any of this it reads the base branch's rules and stops if they require a check that is not
 #   listed in required-contexts (a check the bot's PR would never get).
 # stuck job (caller's schedule, e.g. every 30 minutes): opens an issue if an archive PR has been open
 # for more than stuck-minutes, with its checks, so a refused approval or a failed check never goes
 # unnoticed.
 #
-# Any failure opens (or comments on) an issue labelled "openspec" with the output; nothing lands.
+# Any failure opens (or comments on) an issue labelled "openspec" with the output; nothing lands. The
+# failing step ends with a "Why the OpenSpec archive failed" block holding the real error lines (also
+# ::error:: annotations), and the issue opens with them (tools/openspec/report-failure.sh), so the
+# script Actions echoes at the start of each step is never taken for the error.
 # Nothing to archive exits 0. Runs are serialised per repository. The merge is made with
 # GITHUB_TOKEN, so it starts no workflow on the base branch (no CI re-run, no release build). Needs
 # the caller repo's setting "Allow GitHub Actions to create and approve pull requests".
@@ -224,6 +231,13 @@ jobs:
           gh pr merge "$pr" --auto --rebase --match-head-commit "$sha" >> "$LOG" 2>&1 || fail "$label" "Could not turn on auto-merge for #$pr."
           echo "Opened #$pr for $label at ${sha::7}; its checks are approved and running; it merges when they pass."
 
+          # Close the bot's own open "OpenSpec archive failed: <name>" issues for the changes just archived
+          # (tools/openspec/close_resolved.py; it only warns if it cannot, as the archive is done).
+          archived=()
+          while IFS= read -r n; do [ -z "$n" ] || archived+=("$n"); done <<< "$names"
+          python3 "$TOOLS/tools/openspec/close_resolved.py" "$GITHUB_REPOSITORY" "$pr" "$RUN_URL" ${archived[@]+"${archived[@]}"} \
+            || echo "::warning::Could not run the issue closer; close any fixed \"OpenSpec archive failed\" issue by hand."
+
   stuck:
     name: Check for a stuck archive PR
     if: github.event_name == 'schedule'
@@ -278,7 +292,8 @@ jobs:
           if [ -z "${pr:-}" ] || [ "$pr" = null ]; then echo "No open archive PR."; exit 0; fi
           age=$(python3 -c 'import sys, datetime as d; print(int((d.datetime.now(d.timezone.utc) - d.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))).total_seconds()))' "$created")
           if [ "$age" -lt "$((STUCK_MINUTES * 60))" ]; then echo "#$pr has been open $((age / 60)) minutes."; exit 0; fi
+          # The merge state first and the checks last, so the "Why" block (the log's last 20 lines) shows the checks.
+          gh pr view "$pr" --json mergeStateStatus,autoMergeRequest >> "$LOG" 2>&1
           gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" \
             --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"' >> "$LOG" 2>&1
-          gh pr view "$pr" --json mergeStateStatus,autoMergeRequest >> "$LOG" 2>&1
           fail "#$pr" "The archive PR #$pr has been open for $((age / 60)) minutes without merging. Its checks are below; a held check needs approving in the PR's Checks tab, a failed one needs fixing."

@@ -1,0 +1,26 @@
+$ openspec archive watch-screenshot-layout --yes
+Task status: 9/11 tasks
+Warning: 2 incomplete task(s) found. Continuing due to --yes flag.
+
+Specs to update:
+  watch: update
+Applying changes to openspec/specs/watch/spec.md:
+  + 4 added
+Totals: + 4, ~ 0, - 0, → 0
+Specs updated successfully.
+Change 'watch-screenshot-layout' archived as '2026-10-23-watch-screenshot-layout'.
+
+$ openspec validate --specs --strict --no-interactive
+✓ spec/alarms
+✓ spec/watch
+Totals: 29 passed, 0 failed (29 items)
+
+$ openspec validate --archived --no-interactive
+Totals: 12 passed, 1 failed (13 items)
+✗ change/2026-10-23-watch-screenshot-layout
+  ✗ 2 incomplete tasks (9/11 completed)
+
+PROBLEM: openspec validate --archived failed (an archived change has an unticked task; tick it if done, else move it to an issue and tick it as moved):
+Totals: 12 passed, 1 failed (13 items)
+✗ change/2026-10-23-watch-screenshot-layout
+  ✗ 2 incomplete tasks (9/11 completed)

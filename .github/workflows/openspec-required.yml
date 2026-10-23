@@ -125,9 +125,10 @@ jobs:
             printf 'result=pass\nreason=not-a-pr\n' >> "$GITHUB_OUTPUT"; exit 0
           fi
           [[ "$BUDGET_FILE" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::budget-file '$BUDGET_FILE' is not an allowed path."; exit 1; }
+          # Actions runs bash with -e, so the exit status is caught rather than read from $?.
+          status=0
           python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/required.py" --repo "$REPO" --pr "$PR_NUMBER" \
-            --base "$PR_BASE" --head "$PR_HEAD" --budget-file "$BUDGET_FILE"
-          status=$?
+            --base "$PR_BASE" --head "$PR_HEAD" --budget-file "$BUDGET_FILE" || status=$?
           if [ "$status" -ne 0 ] && [ "$WARN_ONLY" = true ]; then
             echo "::warning::OpenSpec required failed (exit $status); warn-only, so this job passes."; exit 0
           fi

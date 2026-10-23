@@ -75,6 +75,21 @@ class Check(unittest.TestCase):
             "A capability used only", "TBD - created by archiving change c. Update Purpose after archive.\nA capability used only"))
         self.assertFalse(self.archive.check())
 
+    def _archived(self, tasks):
+        d = self.root / "openspec/changes/archive/2026-01-01-done"
+        (d / "specs/x").mkdir(parents=True)
+        (d / "proposal.md").write_text("# done\n\n## Why\nA change used only by these tests, long enough to pass.\n\n## What Changes\n- Nothing real.\n")
+        (d / "tasks.md").write_text("# Tasks\n\n## 1. Work\n\n" + tasks)
+        (d / "specs/x/spec.md").write_text("## ADDED Requirements\n\n### Requirement: Other\nThe other SHALL work.\n\n#### Scenario: Works\n- **WHEN** used\n- **THEN** it works\n")
+
+    def test_archived_change_with_an_unticked_task_fails(self):
+        self._archived("- [x] 1.1 Done\n- [ ] 1.2 Not done\n")
+        self.assertFalse(self.archive.check())
+
+    def test_archived_change_with_every_task_ticked_passes(self):
+        self._archived("- [x] 1.1 Done\n- [x] 1.2 ~~Device check~~ moved to #12 (23 October 2026)\n")
+        self.assertTrue(self.archive.check())
+
     def test_em_dash_fails(self):
         (self.root / "openspec/changes/c/proposal.md").write_text("# c " + chr(0x2014) + " x\n")
         self.assertFalse(self.archive.check())

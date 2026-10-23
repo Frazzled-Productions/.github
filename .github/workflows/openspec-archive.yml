@@ -7,13 +7,15 @@ name: OpenSpec archive (reusable)
 # branch (openspec/changes/<name>, not under archive/) has merged.
 #
 # The Python and shell tools come from this repository at the commit this workflow runs from
-# (job.workflow_sha: the SHA or tag the caller pins), fetched into the runner's temp folder. They
+# (job.workflow_sha: the SHA or tag the caller pins; for an annotated tag GitHub gives the tag object,
+# which the fetch resolves to its commit), fetched into the runner's temp folder. They
 # never come from the caller's tree, so a change in the caller cannot alter the guards it is judged by.
 #
 # archive job (caller's push to the base branch touching openspec/changes, or "Run workflow"):
 #   1. From a fresh fetch of the base branch, on the archive branch, archive each active change in
 #      name order with `openspec archive <name> --yes`, check the result (tools/openspec/archive.py:
-#      no "TBD - created" Purpose, `openspec validate --specs --strict`, no em dash in openspec/,
+#      no "TBD - created" Purpose, `openspec validate --specs --strict`, `openspec validate
+#      --archived` (every archived change has all its tasks ticked), no em dash in openspec/,
 #      nothing outside openspec/ touched) and commit it as "Archive OpenSpec change <name> into the
 #      main specs".
 #   2. Push the branch (re-fetching and rebuilding once if the push is refused) and open, or reuse,
@@ -129,13 +131,17 @@ jobs:
           TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
           TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
           [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
-          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a commit SHA."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
           tools="$RUNNER_TEMP/frazzled-openspec-tools"
           rm -rf "$tools" && git init -q "$tools"
           git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
           git -C "$tools" checkout -q --detach FETCH_HEAD
-          [ "$(git -C "$tools" rev-parse HEAD)" = "$TOOLS_SHA" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
-          echo "Shared tools: $TOOLS_REPO at $TOOLS_SHA"
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" = "$want" ] && [ "$(git -C "$tools" rev-parse HEAD)" = "$want" ] \
+            || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
 
       - name: Check the inputs
         run: |
@@ -248,12 +254,17 @@ jobs:
           TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
           TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
           [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
-          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a commit SHA."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
           tools="$RUNNER_TEMP/frazzled-openspec-tools"
           rm -rf "$tools" && git init -q "$tools"
           git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
           git -C "$tools" checkout -q --detach FETCH_HEAD
-          [ "$(git -C "$tools" rev-parse HEAD)" = "$TOOLS_SHA" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" = "$want" ] && [ "$(git -C "$tools" rev-parse HEAD)" = "$want" ] \
+            || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
 
       - name: Archive PR open too long
         run: |

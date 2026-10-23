@@ -13,6 +13,7 @@ Checks (each failure is printed and makes the exit code 1):
   - no spec Purpose is the "TBD - created" placeholder the archive writes for a new capability
     whose delta had no "## Purpose" section;
   - `openspec validate --specs --strict` passes;
+  - `openspec validate --archived` passes: every archived change has all its tasks ticked;
   - no em dash anywhere under openspec/ (house style);
   - the working tree changes nothing but plain files under openspec/ (tools/ci/changed_files.py),
     and nothing under openspec/changes is a symlink.
@@ -63,6 +64,13 @@ def check():
     code, out = run("openspec", "validate", "--specs", "--strict", "--no-interactive")
     if code != 0:
         problems.append("openspec validate --specs --strict failed:\n" + out)
+
+    # Every archived change has all its tasks ticked; a task left for later is moved to an issue and
+    # ticked as moved ("~~...~~ moved to #N"). With nothing archived yet it passes.
+    code, out = run("openspec", "validate", "--archived", "--no-interactive")
+    if code != 0:
+        problems.append("openspec validate --archived failed (an archived change has an unticked task; "
+                        "tick it if done, else move it to an issue and tick it as moved):\n" + out)
 
     for path in sorted((ROOT / "openspec").rglob("*")):
         if path.is_file():

@@ -6,10 +6,15 @@ name: Self-test
 #   - zizmor: Actions security audit (template injection, unpinned actions, credentials);
 #   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode;
 #   - OpenSpec tools: the unit tests of tools/ (approve_runs.py guards, archive.py checks,
-#     changed_files.py rules, the command-centre liveness rule) with the openspec CLI installed from npm at a pinned version;
-#   - OpenSpec changed files and overlap: the reusable workflows run against this repo, which proves
-#     they fetch their tools from their own commit (job.workflow_sha). The archive and docs-only
-#     check workflows are exercised by their callers (they need an openspec/ folder and the CLI).
+#     changed_files.py rules, required.py, context_budget.py, the command-centre liveness rule) with
+#     the openspec CLI installed from npm at a pinned version;
+#   - OpenSpec changed files, overlap and required: the reusable workflows run against this repo, which
+#     proves they fetch their tools from their own commit (job.workflow_sha). Overlap installs the CLI
+#     through its install-openspec input. OpenSpec required runs warn-only, because this repo has no
+#     openspec/ (its tooling changes are specced in roast-conductor's openspec-tooling, Fraser,
+#     23 October 2026), and its result is checked: "adopt OpenSpec first" on a code PR, a pass on a
+#     docs-only one. The archive and docs-only check workflows are exercised by their callers;
+#   - Context budget: this repo's own check against .github/context-budget.txt.
 
 on:
   pull_request:
@@ -97,5 +102,40 @@ jobs:
       contents: read
       pull-requests: read
     uses: ./.github/workflows/openspec-overlap.yml # zizmor: ignore[self-repository]
+    with:
+      runs-on: '"ubuntu-latest"'
+      install-openspec: true
+
+  openspec-required:
+    name: OpenSpec required
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    uses: ./.github/workflows/openspec-required.yml # zizmor: ignore[self-repository]
+    with:
+      runs-on: '"ubuntu-latest"'
+      warn-only: true
+
+  openspec-required-result:
+    name: OpenSpec required result
+    needs: openspec-required
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Adopt-first on a code PR, a pass otherwise
+        env:
+          RESULT: ${{ needs.openspec-required.outputs.result }}
+          REASON: ${{ needs.openspec-required.outputs.reason }}
+        run: |
+          echo "result=$RESULT reason=$REASON"
+          case "$RESULT/$REASON" in
+            fail/adopt-first|pass/docs-only|pass/not-a-pr|pass/dependabot) ;;
+            *) echo "::error::Unexpected OpenSpec required result here: $RESULT/$REASON."; exit 1 ;;
+          esac
+
+  context-budget:
+    name: Context budget
+    uses: ./.github/workflows/context-budget.yml # zizmor: ignore[self-repository]
     with:
       runs-on: '"ubuntu-latest"'

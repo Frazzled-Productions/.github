@@ -135,7 +135,7 @@ class ContextBudget(unittest.TestCase):
     def test_seed_leaves_out_rules_when_there_are_none(self):
         code, out = self.check({"AGENTS.md": lines(3), "CLAUDE.md": "@AGENTS.md\n"})
         self.assertEqual(code, 1, out)
-        self.assertNotIn("RULES_UNSCOPED", out)
+        self.assertNotIn("RULES_UNSCOPED\t", out)
 
     # A raised budget says why
 

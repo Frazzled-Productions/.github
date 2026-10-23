@@ -34,6 +34,10 @@ on:
         description: Runner labels as a JSON array, or a JSON string. Needs git, gh, python3 and the openspec CLI.
         type: string
         default: '["self-hosted", "macOS", "ARM64"]'
+      install-openspec:
+        description: Install the openspec CLI (@fission-ai/openspec 1.14.3 from npm) first, for a GitHub-hosted runner without it. Leave off on the self-hosted Mac.
+        type: boolean
+        default: false
       base-branch:
         description: The branch whose specs the deltas are checked against.
         type: string
@@ -83,6 +87,16 @@ jobs:
             echo "::error::Fetched the wrong tools commit."; exit 1
           fi
           echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: inputs.install-openspec
+        with:
+          node-version: '24'
+
+      - name: Install the openspec CLI
+        if: inputs.install-openspec
+        # Exact version, no install scripts, as self-test.yml installs it.
+        run: npm install --global --ignore-scripts @fission-ai/openspec@1.14.3 # zizmor: ignore[adhoc-packages]
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

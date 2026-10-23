@@ -1,0 +1,134 @@
+name: OpenSpec required (reusable)
+
+# "OpenSpec required": a PR that changes more than docs must carry an OpenSpec change (owner decision
+# 23 October 2026). Docs-only PRs pass (tools/ci/changed_files.py's docs rule, plus the repo's context
+# budget file); so do the archive bot's PRs, which only touch openspec/, with no exemption by author or
+# branch. Dependabot PRs that only change dependency manifests, lock files or workflow files pass, with
+# a notice. Anything else needs an active change in openspec/changes/<name>/ with a delta or
+# `skip_specs: true`; a repo with no openspec/ is told to adopt OpenSpec first
+# (ops/standards/openspec-adoption/README.md). The one exception is the `no-spec` label added by
+# fraserbrookhouse (read from the PR's issue events, fixed in the tool, never an input) with a
+# `## No spec` section in the PR body; the run prints who added it and when, and one PR comment records
+# it. Logic and tests: tools/openspec/required.py, fetched from this repository at the commit this
+# workflow runs from, never from the PR. Needs only git, python3 and gh, not the openspec CLI.
+#
+# The job has no `if:`: a skipped job counts as passing a required check. On anything but a
+# pull_request event it passes at once, saying there is no PR to judge.
+#
+# Consumer (thin caller in the repo's .github/workflows/openspec-required.yml; `qa` for the
+# two-branch repos):
+#
+#   name: OpenSpec required
+#   on:
+#     pull_request:
+#       branches: [main]
+#       types: [opened, synchronize, reopened, labeled, unlabeled]
+#   permissions:
+#     contents: read
+#   jobs:
+#     required:
+#       name: OpenSpec required
+#       permissions:
+#         contents: read
+#         pull-requests: write # the one exemption comment
+#         issues: read # who added the no-spec label
+#       uses: Frazzled-Productions/.github/.github/workflows/openspec-required.yml@v1
+#
+# The check is then named "OpenSpec required / OpenSpec required".
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string. Needs git, python3 and gh.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      budget-file:
+        description: The repo's context budget file, which counts as docs.
+        type: string
+        default: .github/context-budget.txt
+      warn-only:
+        description: Report a failure as a warning and pass. For this repository's self-test only; a caller that sets it gives up the check.
+        type: boolean
+        default: false
+    outputs:
+      result:
+        description: "'pass' or 'fail'."
+        value: ${{ jobs.required.outputs.result }}
+      reason:
+        description: docs-only, dependabot, change, label, adopt-first, no-change, label-refused, not-a-pr or error.
+        value: ${{ jobs.required.outputs.reason }}
+
+permissions:
+  contents: read
+
+jobs:
+  required:
+    name: OpenSpec required
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    concurrency:
+      group: openspec-required-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    outputs:
+      result: ${{ steps.judge.outputs.result }}
+      reason: ${{ steps.judge.outputs.reason }}
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: judge
+        name: Does this PR carry an OpenSpec change?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BUDGET_FILE: ${{ inputs.budget-file }}
+          WARN_ONLY: ${{ inputs.warn-only }}
+        run: |
+          set -uo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "OpenSpec required only judges pull requests; nothing to check for a $EVENT_NAME event."
+            printf 'result=pass\nreason=not-a-pr\n' >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          [[ "$BUDGET_FILE" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::budget-file '$BUDGET_FILE' is not an allowed path."; exit 1; }
+          python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/required.py" --repo "$REPO" --pr "$PR_NUMBER" \
+            --base "$PR_BASE" --head "$PR_HEAD" --budget-file "$BUDGET_FILE"
+          status=$?
+          if [ "$status" -ne 0 ] && [ "$WARN_ONLY" = true ]; then
+            echo "::warning::OpenSpec required failed (exit $status); warn-only, so this job passes."; exit 0
+          fi
+          exit "$status"

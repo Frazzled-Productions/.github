@@ -1,0 +1,100 @@
+name: Context budget (reusable)
+
+# "Context budget": a ceiling on the instruction surface, lifted from Koinori's
+# tools/dev/check-context-budget.sh into a shared check for every repo (owner decision 23 October
+# 2026). The budget file (input `budget-file`, default .github/context-budget.txt) holds
+# `<path or spec><TAB><max lines>` lines: a path, GLOB:<pattern> (summed) or RULES_UNSCOPED
+# (.claude/rules/*.md without `paths:` in their first 12 lines); `#` lines are comments. Any entry
+# over budget fails; under budget only prints a note. A missing budget file fails and prints a seed
+# with today's counts. On a PR, an entry raised since the base needs an added
+# `# <old> -> <new> on <date>: <reason>` line directly above it, and a removed entry an added
+# `# removed <spec>: <reason>` line. Logic and tests: tools/ci/context_budget.py, fetched from this
+# repository at the commit this workflow runs from. Needs only git and python3.
+#
+# The job has no `if:`: a skipped job counts as passing a required check. It runs on docs-only PRs
+# too, since AGENTS.md edits are docs-only.
+#
+# Consumer (thin caller in the repo's .github/workflows/context-budget.yml; `qa` for the two-branch
+# repos; ops adds `push: branches: [main]`):
+#
+#   name: Context budget
+#   on:
+#     pull_request:
+#       branches: [main]
+#       types: [opened, synchronize, reopened, labeled, unlabeled]
+#   permissions:
+#     contents: read
+#   jobs:
+#     budget:
+#       name: Context budget
+#       uses: Frazzled-Productions/.github/.github/workflows/context-budget.yml@v1
+#
+# The check is then named "Context budget / Context budget".
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string. Needs git and python3.
+        type: string
+        default: '["self-hosted", "macOS", "ARM64"]'
+      budget-file:
+        description: The budget file, relative to the repo root.
+        type: string
+        default: .github/context-budget.txt
+
+permissions:
+  contents: read
+
+jobs:
+  budget:
+    name: Context budget
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Count the instruction surface against its budget
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          BUDGET_FILE: ${{ inputs.budget-file }}
+        run: |
+          set -euo pipefail
+          [[ "$BUDGET_FILE" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::budget-file '$BUDGET_FILE' is not an allowed path."; exit 1; }
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE" ;;
+            push) base="$PUSH_BEFORE"; [[ "$base" =~ ^0+$ ]] && base="" ;;
+            *) base="" ;;
+          esac
+          args=(--budget-file "$BUDGET_FILE")
+          [ -n "$base" ] && args+=(--base "$base")
+          python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/ci/context_budget.py" "${args[@]}"

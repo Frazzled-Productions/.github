@@ -87,7 +87,8 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$BASE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "::error::'$BASE' is not an allowed branch name."; exit 1; }
-          git -c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64)" fetch --quiet --depth=1 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          # tr: GNU base64 wraps at 76 characters, which would break the header on a Linux runner.
+          git -c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')" fetch --quiet --depth=1 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
 
       - name: Validate this PR's changes
         run: |

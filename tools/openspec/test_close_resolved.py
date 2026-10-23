@@ -127,6 +127,33 @@ class CloseResolved(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)
         self.assertEqual(fakegh.calls(self.dir), [])
 
+    def test_another_bots_issue_stays_open(self):
+        self.env["FAKE_GH_ISSUES"] = json.dumps([issue(1, "add-x", {"login": "app/dependabot", "is_bot": True})])
+        self.run_script("add-x")
+        self.assertEqual(self.touched(), [])
+
+    def test_a_crash_warns_and_exits_0(self):
+        self.env["PATH"] = str(self.dir / "no-such-bin")  # no gh at all
+        proc = self.run_script("add-x")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("::warning::", proc.stdout)
+
+
+class Wiring(unittest.TestCase):
+    """A contract on the archive job's script (source text): the closer runs last, after auto-merge is
+    on and never on "Nothing to archive", with the PR, the run URL and the archived names as separate
+    arguments, and a refusal only warns."""
+
+    def test_the_closer_is_called_last_with_the_archived_names(self):
+        text = (HERE.parent.parent / ".github/workflows/openspec-archive.yml").read_text(encoding="utf-8")
+        archive_job = text[text.index("  archive:"):text.index("  stuck:")]
+        call = archive_job.index('close_resolved.py" "$GITHUB_REPOSITORY" "$pr" "$RUN_URL" ${archived[@]+"${archived[@]}"}')
+        self.assertGreater(call, archive_job.index('gh pr merge "$pr" --auto'))
+        self.assertGreater(call, archive_job.index('echo "Nothing to archive."; exit 0'))
+        self.assertIn("|| echo \"::warning::", archive_job[call:call + 300])
+        self.assertIn('archived+=("$n"); done <<< "$names"', archive_job)
+        self.assertNotIn("close_resolved.py", text[text.index("  stuck:"):])
+
 
 if __name__ == "__main__":
     unittest.main()

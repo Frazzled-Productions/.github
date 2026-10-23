@@ -4,6 +4,7 @@ install(tmp) writes an executable `gh` into tmp/bin that records each call's arg
 list per line in tmp/gh-calls.jsonl) and answers from environment variables:
   FAKE_GH_ISSUES  the JSON printed for `gh issue list` (default "[]")
   FAKE_GH_FAIL    calls whose joined arguments contain this text exit 1
+  FAKE_GH_CHATTER a line printed before the URL of `gh issue create` or `gh issue comment`
 `gh issue create` prints a new issue URL, `gh issue comment N` a comment URL; the rest print nothing.
 """
 import json
@@ -25,8 +26,12 @@ if fail and fail in " ".join(args):
 if args[:2] == ["issue", "list"]:
     print(os.environ.get("FAKE_GH_ISSUES", "[]"))
 elif args[:2] == ["issue", "create"]:
+    if os.environ.get("FAKE_GH_CHATTER"):
+        print(os.environ["FAKE_GH_CHATTER"], file=sys.stderr)
     print("ISSUE_URL")
 elif args[:2] == ["issue", "comment"]:
+    if os.environ.get("FAKE_GH_CHATTER"):
+        print(os.environ["FAKE_GH_CHATTER"], file=sys.stderr)
     print("https://github.com/Frazzled-Productions/example/issues/" + args[2] + "#issuecomment-1")
 '''.replace("ISSUE_URL", ISSUE_URL)
 

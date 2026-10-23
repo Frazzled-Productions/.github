@@ -22,8 +22,8 @@ import subprocess
 import sys
 
 PREFIX = "OpenSpec archive failed: "
-NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 BOT_LOGINS = {"app/github-actions", "github-actions[bot]", "github-actions"}
 
 
@@ -46,7 +46,7 @@ def named_changes(title):
     if not title.startswith(PREFIX):
         return None
     names = title[len(PREFIX):].split(", ")
-    return names if names and all(NAME.match(n) for n in names) else None
+    return names if names and all(NAME.fullmatch(n) for n in names) else None
 
 
 def resolved(issues, archived):
@@ -59,13 +59,13 @@ def resolved(issues, archived):
 
 
 def main(argv):
-    if len(argv) < 3 or not REPO.match(argv[0]) or not argv[1].isdigit() or not argv[2].startswith("https://"):
+    if len(argv) < 3 or not REPO.fullmatch(argv[0]) or not argv[1].isdigit() or not argv[2].startswith("https://"):
         print(__doc__, file=sys.stderr)
         return 2
     repo, pr, run_url, names = argv[0], argv[1], argv[2], argv[3:]
     archived = set()
     for name in names:
-        if NAME.match(name):
+        if NAME.fullmatch(name):
             archived.add(name)
         else:
             warn(f"'{name}' is not a change name; no issue is closed for it.")
@@ -101,4 +101,8 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as error:  # the archive is done; a crash here must not turn the run red
+        warn(f"Could not close the failure issues ({type(error).__name__}: {error}); close them by hand.")
+        sys.exit(0)

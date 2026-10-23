@@ -235,7 +235,8 @@ jobs:
           # (tools/openspec/close_resolved.py; it only warns if it cannot, as the archive is done).
           archived=()
           while IFS= read -r n; do [ -z "$n" ] || archived+=("$n"); done <<< "$names"
-          python3 "$TOOLS/tools/openspec/close_resolved.py" "$GITHUB_REPOSITORY" "$pr" "$RUN_URL" ${archived[@]+"${archived[@]}"}
+          python3 "$TOOLS/tools/openspec/close_resolved.py" "$GITHUB_REPOSITORY" "$pr" "$RUN_URL" ${archived[@]+"${archived[@]}"} \
+            || echo "::warning::Could not run the issue closer; close any fixed \"OpenSpec archive failed\" issue by hand."
 
   stuck:
     name: Check for a stuck archive PR
@@ -291,7 +292,8 @@ jobs:
           if [ -z "${pr:-}" ] || [ "$pr" = null ]; then echo "No open archive PR."; exit 0; fi
           age=$(python3 -c 'import sys, datetime as d; print(int((d.datetime.now(d.timezone.utc) - d.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))).total_seconds()))' "$created")
           if [ "$age" -lt "$((STUCK_MINUTES * 60))" ]; then echo "#$pr has been open $((age / 60)) minutes."; exit 0; fi
+          # The merge state first and the checks last, so the "Why" block (the log's last 20 lines) shows the checks.
+          gh pr view "$pr" --json mergeStateStatus,autoMergeRequest >> "$LOG" 2>&1
           gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" \
             --jq '.check_runs[] | "\(.name)\t\(.status)\t\(.conclusion)"' >> "$LOG" 2>&1
-          gh pr view "$pr" --json mergeStateStatus,autoMergeRequest >> "$LOG" 2>&1
           fail "#$pr" "The archive PR #$pr has been open for $((age / 60)) minutes without merging. Its checks are below; a held check needs approving in the PR's Checks tab, a failed one needs fixing."

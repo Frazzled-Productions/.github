@@ -68,7 +68,7 @@ GitHub-hosted minutes. Snippets are in each file's header.
   Failures open or comment on an issue labelled `openspec`, which opens with the real error lines; the
   failing step's log ends with the same lines as error annotations. When a later run archives the
   change, the bot comments on its own failure issue for it (linking the run and the archive PR) and
-  closes it. Inputs: `required-contexts` (required, one
+  closes it, once auto-merge is on (if a check then fails, the stuck job opens its own issue). Inputs: `required-contexts` (required, one
   per line), optional `runs-on`, `archive-branch` (default `openspec-archive`), `base-branch` (`main`),
   `stuck-minutes` (30). The caller job grants `actions: write`, `contents: write`,
   `pull-requests: write`, `issues: write`, `checks: read`; the repo needs "Allow GitHub Actions to

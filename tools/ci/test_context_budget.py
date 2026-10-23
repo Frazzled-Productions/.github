@@ -115,6 +115,15 @@ class ContextBudget(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("lots", out)
 
+    def test_an_entry_without_a_tab_fails(self):
+        code, out = self.check({BUDGET: "AGENTS.md 1\n", "AGENTS.md": lines(3)})
+        self.assertEqual(code, 1, out)
+        self.assertIn("AGENTS.md 1", out)
+
+    def test_a_file_with_no_entries_fails(self):
+        code, out = self.check({BUDGET: "# only comments\n"})
+        self.assertEqual(code, 1, out)
+
     def test_koinoris_real_file_parses(self):
         code, out = self.check({"tools/dev/context-budget.txt": KOINORI}, budget_file="tools/dev/context-budget.txt")
         self.assertEqual(code, 0, out)
@@ -157,6 +166,10 @@ class ContextBudget(unittest.TestCase):
 
     def test_raise_with_a_short_reason_fails(self):
         code, out = self.raise_pr("AGENTS.md\t212\n", "# 212 -> 215: more\nAGENTS.md\t215\n")
+        self.assertEqual(code, 1, out)
+
+    def test_raise_reason_counts_only_the_text_after_the_date(self):
+        code, out = self.raise_pr("AGENTS.md\t212\n", "# 212 -> 215 on 2026-10-24: abcdef\nAGENTS.md\t215\n")
         self.assertEqual(code, 1, out)
 
     def test_raise_reason_above_another_entry_does_not_count(self):

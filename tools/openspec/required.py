@@ -125,7 +125,7 @@ def judge(entries, head, budget_file, author):
 
 
 def no_spec_reason(body):
-    m = NO_SPEC_RE.search(body or "")
+    m = NO_SPEC_RE.search((body or "").replace("\r\n", "\n"))
     if not m:
         return ""
     return re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip()
@@ -167,6 +167,11 @@ def main(argv):
     p.add_argument("--head", required=True)
     p.add_argument("--budget-file", default=".github/context-budget.txt")
     args = p.parse_args(argv)
+    # The caller file is PR-editable, so budget-file must not be able to turn any other file into "docs".
+    if args.budget_file.rsplit("/", 1)[-1] != "context-budget.txt":
+        print(f"::error::budget-file '{args.budget_file}' is not a context-budget.txt file.")
+        write_output("error", "fail")
+        return 2
     cache = {}
 
     def pr_data():

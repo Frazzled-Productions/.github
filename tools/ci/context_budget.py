@@ -65,15 +65,18 @@ def count_for(spec):
     return count(spec) if os.path.isfile(spec) else 0
 
 
-def parse(text):
-    """Return [(line index, spec, budget text)] for every entry line."""
+def parse(text, errors=None):
+    """Return [(line index, spec, budget text)] for every entry line; a line that is not a comment,
+    blank or `<spec><TAB><budget>` is added to errors (when given) instead."""
     entries = []
     for i, line in enumerate(text.splitlines()):
         if not line.strip() or line.startswith("#"):
             continue
-        spec, _, budget = line.partition("\t")
-        if budget.strip():
-            entries.append((i, spec, budget.strip()))
+        spec, tab, budget = line.partition("\t")
+        if tab and spec.strip() and budget.strip():
+            entries.append((i, spec.strip(), budget.strip()))
+        elif errors is not None:
+            errors.append(f"line {i + 1} '{line}' is not <spec><TAB><max lines>.")
     return entries
 
 
@@ -128,7 +131,7 @@ def check_raises(base_text, head_text):
         while k >= 0 and head_lines[k].startswith("#"):
             block.append(k)
             k -= 1
-        pattern = re.compile(rf"\b{was}\s*->\s*{budget}\b(.*)")
+        pattern = re.compile(rf"\b{was}\s*->\s*{budget}\b(?:\s+on\s+\d{{4}}-\d{{2}}-\d{{2}})?(.*)")
         if not any(k in added and (m := pattern.search(head_lines[k])) and len(m.group(1).strip(" :-.,")) >= REASON_MIN
                    for k in block):
             problems.append(f"The raise of {spec} from {was} to {budget} needs a reason line: add "
@@ -155,7 +158,13 @@ def main(argv):
         return 1
     with open(args.budget_file, encoding="utf-8") as f:
         head_text = f.read()
-    ok = check_counts(parse(head_text))
+    errors = []
+    entries = parse(head_text, errors)
+    if not entries:
+        errors.append("it has no entries.")
+    for e in errors:
+        print(f"::error::{args.budget_file}: {e}")
+    ok = check_counts(entries) and not errors
     if args.base:
         try:
             listed = subprocess.run(["git", "ls-tree", "--name-only", args.base, "--", args.budget_file],

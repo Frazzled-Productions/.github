@@ -99,7 +99,7 @@ GitHub-hosted minutes. Snippets are in each file's header.
   The one exception: the `no-spec` label added by `fraserbrookhouse` (from the PR's issue events; fixed
   in the tool, not an input) plus a `## No spec` section in the PR body, logged in the run and in one PR
   comment. No `if:` on the job, git, python3 and `gh` only. Inputs: optional `runs-on`, `budget-file`,
-  `warn-only` (this repo's self-test only). The caller runs on `opened, synchronize, reopened, labeled,
+  `warn-only` (honoured only in this repo, for its self-test). The caller runs on `opened, synchronize, reopened, labeled,
   unlabeled` and grants `contents: read`, `pull-requests: write`, `issues: read`.
 - **`context-budget.yml`** - "Context budget / Context budget": a ceiling on the instruction surface, a
   port of Koinori's `check-context-budget.sh` (`tools/ci/context_budget.py`). The budget file (input

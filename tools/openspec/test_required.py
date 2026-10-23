@@ -53,7 +53,8 @@ class Required(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(text)
 
-    def pr(self, change, base=None, author="someone", labels=(), body="", events=(), comments=()):
+    def pr(self, change, base=None, author="someone", labels=(), body="", events=(), comments=(),
+           budget=".github/context-budget.txt"):
         """Commit base, then change on top; run the tool. Returns (exit code, output)."""
         git(self.root, "init", "-q", "-b", "main")
         self.write(BASE_FILES if base is None else base)
@@ -69,11 +70,11 @@ class Required(unittest.TestCase):
                                          "labels": [{"name": n} for n in labels]},
             f"repos/{REPO}/issues/{PR}/events": list(events),
             f"repos/{REPO}/issues/{PR}/comments": list(comments)})
-        return self.run_tool(base_sha, head_sha)
+        return self.run_tool(base_sha, head_sha, budget)
 
-    def run_tool(self, base_sha, head_sha):
+    def run_tool(self, base_sha, head_sha, budget):
         proc = subprocess.run([sys.executable, str(TOOL), "--repo", REPO, "--pr", str(PR), "--base", base_sha,
-                               "--head", head_sha, "--budget-file", ".github/context-budget.txt"],
+                               "--head", head_sha, "--budget-file", budget],
                               cwd=self.root, env=self.env, capture_output=True, text=True)
         return proc.returncode, proc.stdout + proc.stderr
 
@@ -211,6 +212,18 @@ class Required(unittest.TestCase):
         sent = fakegh.option(posts[0], "-f")
         self.assertIn("Emergency revert of #12.", sent)
         self.assertNotIn("Test changes", sent)
+
+    def test_fraser_label_with_a_crlf_body_passes(self):
+        # GitHub's web editor saves PR bodies with CRLF line endings.
+        code, out = self.pr({SWIFT: "// v2\n"}, labels=["no-spec"], body="## No spec\r\nEmergency revert of #12.\r\n",
+                            events=[labelled(FRASER)])
+        self.assertEqual(code, 0, out)
+
+    def test_a_budget_file_input_that_is_not_a_budget_file_is_refused(self):
+        # The caller file is PR-editable: budget-file must not turn a source file into "docs".
+        code, out = self.pr({"src/x.py": "x\n"}, budget="src/x.py")
+        self.assertEqual(code, 2, out)
+        self.assertIn("context-budget.txt", out)
 
     def test_fraser_label_rerun_edits_the_one_comment(self):
         body = "## No spec\nEmergency revert of #12.\n"

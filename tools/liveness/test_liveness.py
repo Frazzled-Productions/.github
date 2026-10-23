@@ -43,8 +43,9 @@ class Rule(unittest.TestCase):
         self.assertEqual(liveness.decide(NOW, None, None, None)["action"], "none")
         self.assertIn("not connected", liveness.decide(NOW, None, None, None)["reason"])
 
-    def test_one_value_missing_counts_as_stale(self):
-        self.assertEqual(liveness.decide(NOW, NOW - 1 * H, None, None)["action"], "open")
+    def test_one_value_never_written_is_not_connected_not_stale(self):
+        self.assertEqual(liveness.decide(NOW, NOW - 1 * H, None, None)["action"], "none")
+        self.assertEqual(liveness.decide(NOW, None, NOW - 30 * H, None)["action"], "open")
 
     def test_bad_value_counts_as_missing(self):
         self.assertEqual(liveness.parse("abc"), None)

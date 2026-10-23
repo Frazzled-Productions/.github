@@ -34,11 +34,13 @@ def decide(now, heartbeat, now_md, open_issue):
     """Return {action: none|open|update|close, issue, title, body, reason}."""
     if heartbeat is None and now_md is None:
         return dict(action="none", issue=open_issue, reason="not connected yet (no heartbeat variables written)")
-    hb_stale = heartbeat is None or now - heartbeat > LIMIT
-    nm_stale = now_md is None or now - now_md > LIMIT
+    # A variable never written is "not connected", not stale: the two are connected one at a time
+    # (now.md's heartbeat may arrive before the watcher's), and a first connect must not ping Fraser.
+    hb_stale = heartbeat is not None and now - heartbeat > LIMIT
+    nm_stale = now_md is not None and now - now_md > LIMIT
     seen = f"Heartbeat: {_age(now, heartbeat)} old. now.md: {_age(now, now_md)} old."
     if hb_stale or nm_stale:
-        worst = max((now - x) if x else LIMIT + 1 for x in (heartbeat, now_md))
+        worst = max(now - x for x in (heartbeat, now_md) if x is not None)
         hours = int(worst // 3600)
         title = f"{TITLE_PREFIX} ({hours} h)"
         what = []

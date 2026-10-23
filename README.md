@@ -2,8 +2,8 @@
 
 The org's shared GitHub config + **reusable CI/automation workflows** - the workflow layer of the
 [dev-toolkit-extraction-plan](https://github.com/Frazzled-Productions/ops/blob/main/dev-toolkit-extraction-plan.md)
-(alongside the [`frazzled-claude`](https://github.com/Frazzled-Productions/frazzled-claude) plugin and
-`ops/standards/`). `profile/README.md` is the public org page; everything else here is org-internal.
+(alongside the shared Claude skills and hooks in `ops/claude-home/` and `ops/standards/`; the old
+`frazzled-claude` plugin is archived). `profile/README.md` is the public org page; everything else here is org-internal.
 
 ## Reusable workflows (`.github/workflows/`)
 - **`ci.yml`** - parameterised CI (`workflow_call`): install + optional lint / typecheck / test / build,
@@ -25,7 +25,8 @@ jobs:
 ```
 - **`em-dash-check.yml`** - fails when a PR or push adds a line containing an em dash (house style).
   Diff-only, so old text never blocks new work. Input: `exclude` (git pathspec globs, one per line).
-  Used by plan-bee, website, koinori-web and ops; the iOS apps get the check from `ios-ci.yml`.
+  Used by plan-bee, website, koinori-web and ops (checked 2026-10-23); the iOS apps get the check
+  from `ios-ci.yml`.
 - **`ios-ci.yml`** - CI for the quick iOS apps (`workflow_call`): XcodeGen project check, no em
   dashes, engine package tests, app tests on the simulator, on the caller's self-hosted Mac runner.
   Inputs: `project`, `scheme`, `engine-package`, optional `simulator`, `runs-on`, `timeout-minutes`.

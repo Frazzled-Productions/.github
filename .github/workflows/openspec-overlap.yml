@@ -5,7 +5,8 @@ name: OpenSpec overlap (reusable)
 # would silently overwrite the first: OpenSpec issues #1246, #1387, #2033), and a MODIFIED, REMOVED or
 # RENAMED target that is no longer on the base branch. Each finding is a warning annotation; the check
 # fails only for those two. It also runs `openspec validate --strict` on each change the PR adds or
-# edits. Logic and a local test mode: tools/openspec/overlap.py, fetched from this repository at the
+# edits, and simulates the archive of every active change on a copy, then validates the merged specs
+# (`archive.py simulate`, run locally from the repo root). Logic and a local test mode: tools/openspec/overlap.py, fetched from this repository at the
 # commit this workflow runs from, never from the PR. PRs without OpenSpec deltas pass at once.
 # Moved here from roast-conductor (owner decision 23 October 2026).
 #
@@ -120,6 +121,12 @@ jobs:
             fi
           done
           [ -n "$changes" ] || echo "No OpenSpec changes in this PR."
+
+      # Archive every active change on a temporary copy, then validate the merged specs, so a PR that
+      # would fail the archive after merge (for example a MODIFIED requirement over 500 characters,
+      # which change validation skips) is red here instead (ops #227). The checkout is not touched.
+      - name: Simulated archive
+        run: python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/archive.py" simulate
 
       - name: Overlap with other open PRs and with the base branch
         run: python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/overlap.py" --pr "$PR_NUMBER" --main-ref "origin/$BASE"

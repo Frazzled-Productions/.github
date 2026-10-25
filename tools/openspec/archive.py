@@ -132,12 +132,14 @@ def simulate():
 
     Not `validate --archived`: unticked tasks are the "OpenSpec tasks ticked" check's job, and the
     em dash and symlink checks already run on the real tree. The checkout is never touched."""
+    if not (ROOT / "openspec").is_dir():
+        print("No openspec/ folder; nothing to simulate", flush=True)
+        return True
     names = active_changes()
     problems = []
     with tempfile.TemporaryDirectory() as tmp:
         copy = pathlib.Path(tmp)
-        if (ROOT / "openspec").is_dir():
-            shutil.copytree(ROOT / "openspec", copy / "openspec", symlinks=True)
+        shutil.copytree(ROOT / "openspec", copy / "openspec", symlinks=True)
         for name in names:
             code, _ = run("openspec", "archive", name, "--yes", cwd=copy)
             if code != 0:

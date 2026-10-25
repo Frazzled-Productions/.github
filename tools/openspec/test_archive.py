@@ -181,6 +181,14 @@ class Simulate(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("No active changes; specs valid", out)
 
+    def test_repo_without_openspec_folder_passes(self):
+        # The .github self-test runs the overlap workflow on this repo, which has no openspec/.
+        self.git("rm", "-rq", "openspec")
+        self.commit()
+        code, out = self.simulate()
+        self.assertEqual(code, 0, out)
+        self.assertIn("No openspec/ folder; nothing to simulate", out)
+
     def test_two_changes_are_archived_cumulatively_in_name_order(self):
         # Archived the other way round the requirement would end at 300 characters and pass.
         self.change("a-first", delta("MODIFIED", "Thing works", requirement(300)))

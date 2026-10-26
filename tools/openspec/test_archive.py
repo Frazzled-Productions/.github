@@ -153,11 +153,17 @@ class Simulate(unittest.TestCase):
         (d / "specs" / capability / "spec.md").write_text(spec_delta)
         self.commit()
 
-    def simulate(self):
+    def simulate(self, *args):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = self.archive.main(["simulate"])
+            code = self.archive.main(["simulate", *args])
         return code, out.getvalue()
+
+    def changed_since(self, base):
+        """The PR's changed paths, as the workflow writes them, in a file outside the checkout."""
+        listing = pathlib.Path(self.tmp.name) / "changed.txt"
+        listing.write_text(self.git("diff", "--name-only", base, "HEAD"))
+        return str(listing)
 
     def test_modified_requirement_past_500_fails_while_check_passes(self):
         self.change("c", delta("MODIFIED", "Thing works", requirement(600)))
@@ -216,6 +222,33 @@ class Simulate(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("openspec", out)
         self.assertIn("not found", out)
+
+    def test_change_stuck_on_main_is_named_already_on_main(self):
+        # The archive bot failed after this change merged, so it sits on main; the PR touches a README.
+        self.change("stuck", delta("MODIFIED", "Thing works", requirement(600)))
+        base = self.git("rev-parse", "HEAD").strip()
+        (self.root / "README.md").write_text("docs\n")
+        self.commit()
+        code, out = self.simulate("--changed-files", self.changed_since(base))
+        self.assertEqual(code, 1, out)
+        self.assertIn("Simulated archive of stuck (already on main):", out)
+
+    def test_change_the_pr_adds_is_named_from_this_pr(self):
+        self.change("a-stuck", delta("MODIFIED", "Thing works", requirement(600)))
+        base = self.git("rev-parse", "HEAD").strip()
+        self.change("b-new", delta("ADDED", "Other thing", requirement(100)))
+        code, out = self.simulate("--changed-files", self.changed_since(base))
+        self.assertEqual(code, 1, out)
+        self.assertIn("Simulated archive of a-stuck (already on main), b-new (from this PR):", out)
+
+    def test_failed_archive_problem_line_gives_the_reason(self):
+        self.change("c", delta("MODIFIED", "Missing one", requirement(100)))
+        code, out = self.simulate()
+        self.assertEqual(code, 1, out)
+        problem = [line for line in out.splitlines() if line.startswith("PROBLEM:")]
+        self.assertEqual(len(problem), 1, out)
+        self.assertIn("openspec archive c failed (exit 1)", problem[0])
+        self.assertIn("not found", problem[0])
 
     def test_checkout_and_temp_folder_left_alone(self):
         self.change("c", delta("MODIFIED", "Thing works", requirement(600)))

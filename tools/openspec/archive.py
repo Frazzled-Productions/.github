@@ -10,8 +10,9 @@ OPENSPEC_ROOT).
   archive.py check             run the checks only
   archive.py simulate [--changed-files FILE]
                                on a temporary copy of openspec/, archive every active change in name
-                               order, then run the merged-spec checks (the first two below); the PR
-                               check for what the archive after merge would fail (ops #227). FILE lists
+                               order, running the merged-spec checks (the first two below) after each
+                               one and stopping at the first failure, as the bot does; the PR check
+                               for what the archive after merge would fail (ops #227). FILE lists
                                the PR's changed paths, one per line: each change is then marked "from
                                this PR" (its folder is in FILE) or "already on main"
 
@@ -142,7 +143,7 @@ def archive(name):
 
 
 def simulate(changed=None):
-    """Archive every active change on a copy of openspec/, then run the merged-spec checks there.
+    """Archive every active change on a copy of openspec/, running the merged-spec checks after each.
 
     `changed` is the PR's changed paths (None when not known): each change is then marked "from this
     PR" or "already on main", so a PR made red by a change stuck on main says so. Not `validate
@@ -172,8 +173,12 @@ def simulate(changed=None):
                                if line.strip() and not line.startswith("Aborted")), "no output")
                 problems.append(f"openspec archive {mark(name)} failed (exit {code}): {reason.strip()}")
                 break
-        else:
-            problems = purpose_problems(copy) + strict_specs_problems(copy)
+            # Checked after each archive, as the bot's `archive <name>` ends in check(): it stops at the
+            # first change whose merged specs fail, even if a later change would put them right.
+            problems = [f"after archiving {mark(name)}: {p}"
+                        for p in purpose_problems(copy) + strict_specs_problems(copy)]
+            if problems:
+                break
     label = f"Simulated archive of {', '.join(map(mark, names))}:" if names else "No active changes;"
     if not problems:
         print(f"{label} specs valid", flush=True)

@@ -204,6 +204,17 @@ class Simulate(unittest.TestCase):
         self.assertIn("Simulated archive of a-first, b-second", out)
         self.assertIn("very long", out)
 
+    def test_intermediate_state_is_checked_after_each_archive_as_the_bot_does(self):
+        # The end state is 300 characters and valid, but the bot archives a-first alone first, checks,
+        # and fails at 600 before it reaches b-second (final review P2-1).
+        self.change("a-first", delta("MODIFIED", "Thing works", requirement(600)))
+        self.change("b-second", delta("MODIFIED", "Thing works", requirement(300)))
+        code, out = self.simulate()
+        self.assertEqual(code, 1, out)
+        self.assertIn("after archiving a-first", out)
+        self.assertIn("openspec validate --specs --strict failed", out)
+        self.assertIn("very long", out)
+
     def test_unticked_tasks_do_not_fail_simulate(self):
         self.change("c", delta("MODIFIED", "Thing works", requirement(300)), tasks="- [ ] 1.1 Not done\n")
         code, out = self.simulate()

@@ -28,5 +28,14 @@ class Shape(unittest.TestCase):
                 self.assertEqual(nxt.strip(), "if: inputs.install-openspec", name)
 
 
+    def test_simulated_archive_never_hides_the_overlap_step(self):
+        # A change stuck on main makes "Simulated archive" red on every PR (ops #227); the overlap
+        # report must still run, so the simulate step comes after it and runs unless cancelled.
+        text = (WORKFLOWS / "openspec-overlap.yml").read_text(encoding="utf-8")
+        names = re.findall(r"^      - name: (.*)$", text, re.M)
+        self.assertEqual(names[-1], "Simulated archive", names)
+        self.assertIn("      - name: Simulated archive\n        if: ${{ !cancelled() }}\n", text)
+
+
 if __name__ == "__main__":
     unittest.main()

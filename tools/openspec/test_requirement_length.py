@@ -91,6 +91,16 @@ class Lint(Base):
         self.change(delta("MODIFIED", body(900)), name="archive/2026-10-01-old")
         self.assertEqual(self.problems(), [])
 
+    def test_bom_crlf_and_lower_case_headers_still_checked(self):
+        # OpenSpec strips a BOM, normalises CRLF and matches section headers in any case.
+        text = "\ufeff" + delta("MODIFIED", body(501)).replace("## MODIFIED Requirements", "## modified requirements")
+        self.change(text.replace("\n", "\r\n"))
+        self.assertEqual(len(self.problems()), 1)
+
+    def test_metadata_only_body_is_counted(self):
+        self.change(delta("MODIFIED", "**Rule**: The thing SHALL " + "m" * 480))
+        self.assertIn("is 506 characters", self.problems()[0])
+
     def test_counts_utf16_code_units_like_javascript(self):
         # Each emoji is two UTF-16 code units: 498 + 2 = 500 passes, 499 + 2 = 501 fails.
         self.change(delta("MODIFIED", body(498) + "\N{GRINNING FACE}"))

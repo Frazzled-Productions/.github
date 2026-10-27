@@ -4,7 +4,7 @@
 Used by the reusable workflow openspec-docs-check.yml in Frazzled-Productions/.github; also runs
 locally against any checkout (the current directory, or OPENSPEC_ROOT).
 
-  requirement_length.py        check every openspec/changes/<name>/specs/**/spec.md (not archive/)
+  requirement_length.py        check every openspec/changes/<name>/specs/<capability>/spec.md (not archive/)
 
 Why (ops #313): `openspec validate --changes --strict` (1.14.3) does not length-check a MODIFIED
 requirement, and only warns on an ADDED one, while `openspec validate --specs --strict` after the
@@ -16,7 +16,8 @@ extractRequirementBody, and MAX_REQUIREMENT_TEXT_LENGTH in core/validation/const
 after the `### Requirement:` header up to the first header, skipping blank lines and fenced code,
 each trimmed and joined with a newline; `**Key**: value` metadata lines are left out unless they are
 the whole body; an empty body falls back to the header title. Length is in UTF-16 code units, as
-JavaScript's String.length counts. Over 500 fails; exactly 500 passes.
+JavaScript's String.length counts. A leading BOM is dropped and CRLF read as LF, as OpenSpec does.
+Over 500 fails; exactly 500 passes.
 """
 import os
 import pathlib
@@ -100,8 +101,8 @@ def check(root=None):
     if not changes.is_dir():
         return problems
     for change in sorted(p for p in changes.iterdir() if p.is_dir() and p.name != "archive" and not p.name.startswith(".")):
-        for spec in sorted((change / "specs").rglob("spec.md")):
-            for section, title, text in requirements(spec.read_text(encoding="utf-8")):
+        for spec in sorted((change / "specs").glob("*/spec.md")):
+            for section, title, text in requirements(spec.read_text(encoding="utf-8-sig")):
                 if section not in CHECKED_SECTIONS:
                     continue
                 n = js_length(text)

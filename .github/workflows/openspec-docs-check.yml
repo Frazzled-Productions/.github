@@ -90,6 +90,7 @@ jobs:
         run: npm install --global --ignore-scripts @fission-ai/openspec@1.14.3 # zizmor: ignore[adhoc-packages]
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
 
@@ -102,9 +103,9 @@ jobs:
             openspec validate --changes --strict --no-interactive
           fi
 
-      # Runs even when the step above failed, so a PR sees every over-long requirement at once.
+      # Runs even when the archive checks failed, so a PR sees every over-long requirement at once.
       - name: Requirement length in active changes
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         run: python3 -B "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/requirement_length.py"
 
       # The character is written as chr(0x2014) so this file contains no em dash itself.

@@ -7,6 +7,10 @@ name: OpenSpec docs-only check (reusable)
 #     `openspec validate --specs --strict`, `openspec validate --archived` (every archived change
 #     has all its tasks ticked), no em dash in openspec/, no symlink under
 #     openspec/changes), then `openspec validate --changes --strict` when any change is active;
+#   - requirement length (tools/openspec/requirement_length.py, ops #313): an ADDED or MODIFIED
+#     requirement in an active change's delta over 500 characters, counted as OpenSpec counts it,
+#     fails; `openspec validate --changes --strict` lets a MODIFIED one through and the archive
+#     after merge then fails on it;
 #   - Markdown sanity: UTF-8, no merge conflict markers, no em dashes in any file.
 # The tools are fetched from this repository at the commit this workflow runs from.
 #
@@ -97,6 +101,11 @@ jobs:
           if [ -n "$(python3 "$archive" list)" ]; then
             openspec validate --changes --strict --no-interactive
           fi
+
+      # Runs even when the step above failed, so a PR sees every over-long requirement at once.
+      - name: Requirement length in active changes
+        if: ${{ !cancelled() }}
+        run: python3 -B "$RUNNER_TEMP/frazzled-openspec-tools/tools/openspec/requirement_length.py"
 
       # The character is written as chr(0x2014) so this file contains no em dash itself.
       - name: Markdown sanity

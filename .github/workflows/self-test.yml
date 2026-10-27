@@ -5,7 +5,7 @@ name: Self-test
 #   - actionlint: syntax, expressions, shellcheck of run scripts;
 #   - zizmor: Actions security audit (template injection, unpinned actions, credentials);
 #   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode;
-#   - OpenSpec tools: the unit tests of tools/ (approve_runs.py guards, archive.py checks,
+#   - OpenSpec tools: the unit tests of tools/ (approve_runs.py guards, archive.py checks, requirement_length.py,
 #     changed_files.py rules, required.py, context_budget.py, the command-centre liveness rule) with
 #     the openspec CLI installed from npm at a pinned version;
 #   - OpenSpec changed files, overlap and required: the reusable workflows run against this repo, which

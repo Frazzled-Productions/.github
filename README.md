@@ -85,7 +85,10 @@ GitHub-hosted minutes. Snippets are in each file's header.
   `base-branch` (what a `workflow_dispatch` run is compared with).
 - **`openspec-docs-check.yml`** - the quick real check a docs-only change gets instead of the full
   build: the archive checks (including `openspec validate --archived`: every archived change has all
-  its tasks ticked), strict validation of active changes and Markdown sanity. Before moving `v1` to a
+  its tasks ticked), strict validation of active changes, the requirement length lint
+  (`tools/openspec/requirement_length.py`: an ADDED or MODIFIED requirement in an active change's delta
+  over OpenSpec's 500 characters fails, since `openspec validate --changes --strict` lets a MODIFIED one
+  through and the archive after merge then fails, ops #313) and Markdown sanity. Before moving `v1` to a
   release that adds a check, run it on each caller (`openspec validate --archived` there) so no
   caller's `main` turns red. Inputs:
   `job-name` (so it can report under the caller's required check name), optional `runs-on`,

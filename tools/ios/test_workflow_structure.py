@@ -9,8 +9,8 @@ lock (all three slipped through the 28 October 2026 final review with every self
 reads ios-ci.yml and ios-testflight.yml and checks:
   - the Xcode jobs run on the caller's runner, by default ["self-hosted", "macOS", "ARM64"];
   - a reap runs before the first Xcode step, and an `if: always()` reap after the last;
-  - every step that runs xcodebuild, swift test, the lockfile check or the release (archive) script
-    runs it through with-build-lock.sh;
+  - every command in a step that runs xcodebuild, swift test, the lockfile check or the release
+    (archive) script runs it through with-build-lock.sh (comment lines are ignored);
   - each locked step's timeout is below the job's and at least 60 (the lock wait) plus its work;
   - the Lockfile gate job is light.
 Each check is also proven against a mutated copy, so a check that stops looking fails here.
@@ -38,6 +38,9 @@ XCODE_JOBS = {
 }
 LIGHT_JOBS = {("ios-ci.yml", "lockfile-gate")}
 XCODE_WORK = re.compile(r"xcodebuild|swift test|lockfile-check\.sh|RELEASE_SCRIPT")
+# A command runs through the wrapper when the wrapper is what it starts (`bash ".../with-build-lock.sh"
+# ... -- <work>`), so a second Xcode command after it, or a comment naming it, does not count.
+LOCKED = re.compile(r"\s*(bash\s+)?\"?[^\s\"]*with-build-lock\.sh\"?\s")
 REAP = re.compile(r"ci-sim\.sh\"? reap")
 
 
@@ -56,6 +59,22 @@ def minutes(value, inputs):
         return value
     m = re.fullmatch(r"\$\{\{\s*inputs\.([\w-]+)\s*\}\}", str(value).strip())
     return int(inputs[m.group(1)]["default"]) if m else None
+
+
+def commands(run):
+    """The shell commands in a step's `run`, one string each: comment lines dropped, a line ending in
+    a backslash or inside an open single-quoted argument (a `bash -c '...'` body) joined to the next."""
+    out, cur = [], ""
+    for line in run.splitlines():
+        if not cur and (not line.strip() or line.strip().startswith("#")):
+            continue
+        cur += line + "\n"
+        if cur.count("'") % 2 == 0 and not line.rstrip().endswith("\\"):
+            out.append(cur)
+            cur = ""
+    if cur:
+        out.append(cur)
+    return out
 
 
 def violations(name, wf):
@@ -92,8 +111,7 @@ def violations(name, wf):
         for i in xcode:
             step = steps[i]
             label = f"{where} step {step.get('name', i)!r}"
-            lock = runs[i].find("with-build-lock.sh")
-            if lock < 0 or lock > XCODE_WORK.search(runs[i]).start():
+            if any(XCODE_WORK.search(c) and not LOCKED.match(c) for c in commands(runs[i])):
                 out.append(f"{label}: runs Xcode work outside with-build-lock.sh")
             step_timeout = minutes(step.get("timeout-minutes"), inputs)
             if step_timeout is None or job_timeout is None:
@@ -159,6 +177,17 @@ class Mutations(unittest.TestCase):
         job = self.ci["jobs"]["test"]
         step = job["steps"][step_index(job, "with-build-lock")]
         step["run"] = "swift test --package-path \"$ENGINE_PACKAGE\"\nxcodebuild test -project \"$PROJECT\"\n"
+        self.assertCaught("ios-ci.yml", self.ci, "runs Xcode work outside with-build-lock.sh")
+
+    def test_second_unlocked_xcode_line_in_a_locked_step(self):
+        job = self.ci["jobs"]["test"]
+        job["steps"][step_index(job, "with-build-lock")]["run"] += "\nxcodebuild test -project \"$PROJECT\" -scheme X\n"
+        self.assertCaught("ios-ci.yml", self.ci, "runs Xcode work outside with-build-lock.sh")
+
+    def test_wrapper_named_only_in_a_comment(self):
+        job = self.ci["jobs"]["test"]
+        step = job["steps"][step_index(job, "with-build-lock")]
+        step["run"] = "# runs under with-build-lock.sh\n" + step["run"].replace("with-build-lock.sh", "nolock.sh")
         self.assertCaught("ios-ci.yml", self.ci, "runs Xcode work outside with-build-lock.sh")
 
     def test_archive_outside_the_lock(self):

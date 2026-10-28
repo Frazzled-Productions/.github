@@ -15,7 +15,8 @@
 # Each app has its own, so two apps never share or erase each other's device.
 #
 # Everything is best-effort and idempotent except preboot's failures to find a runtime, model or
-# device, which fail the step. Tests: tools/ios/tests/ci-sim-reap.test.sh, ci-sim-preboot.test.sh.
+# device, or to boot within CI_SIM_BOOT_TIMEOUT seconds (default 180), which fail the step.
+# Tests: tools/ios/tests/ci-sim-reap.test.sh, ci-sim-preboot.test.sh.
 
 set -uo pipefail
 
@@ -244,8 +245,18 @@ else:
   echo "Erasing CI simulator ${name} (${udid})." >&2
   xcrun simctl erase "${udid}" 2>/dev/null || true
   echo "Booting CI simulator ${name} (${udid})." >&2
-  xcrun simctl boot "${udid}" 2>/dev/null || true
-  xcrun simctl bootstatus "${udid}" -b 2>/dev/null || true
+  # Boot and bootstatus share one bound (macOS has no `timeout`): a wedged boot inside the locked
+  # step would otherwise hold the host build lock for the whole step. bootstatus is exec'd so the
+  # alarm lands on it; stdout goes to /dev/null so a leftover child never holds the caller's
+  # `$(... | tail -n1)` pipe open. SIGALRM gives 142; any other failure stays tolerated as before.
+  local boot_limit="${CI_SIM_BOOT_TIMEOUT:-180}" rc=0
+  perl -e 'alarm shift; exec @ARGV' "${boot_limit}" \
+    bash -c 'xcrun simctl boot "$1" >/dev/null 2>&1; exec xcrun simctl bootstatus "$1" -b' _ "${udid}" \
+    >/dev/null 2>&1 || rc=$?
+  if [ "${rc}" -eq 142 ]; then
+    echo "::error::CI simulator ${name} (${udid}) did not boot within ${boot_limit} seconds; failing so the job releases the build lock." >&2
+    exit 1
+  fi
   echo "Simulator ready: ${name} (${udid})" >&2
   echo "${udid}"
 }

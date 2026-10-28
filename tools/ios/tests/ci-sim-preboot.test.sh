@@ -5,7 +5,7 @@
 # nothing touches a real simulator. Checks: the name derived from the repository; a missing device is
 # created on the newest available iOS runtime as the requested model; a device of the wrong model is
 # deleted and recreated; shutdown, erase, boot, bootstatus in that order; the UDID is the last line;
-# the default GUI simulator is refused.
+# the default GUI simulator is refused; a boot that never finishes fails within the bound.
 #
 #   tools/ios/tests/ci-sim-preboot.test.sh            test tools/ios/ci-sim.sh
 #   CI_SIM_SCRIPT=/path/to/ci-sim.sh <this>           test another copy
@@ -19,7 +19,8 @@ ok()  { PASS=$((PASS+1)); printf '  ok: %s\n' "$1"; }
 bad() { FAIL=$((FAIL+1)); printf '  FAIL: %s\n' "$1"; }
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/cisimpreboot.XXXXXX")"
-trap 'rm -rf "$T"' EXIT
+# The hang case's stub bootstatus records its PID so a survivor is killed here.
+trap 'kill -9 $(cat "$T/hung" 2>/dev/null) 2>/dev/null; rm -rf "$T"' EXIT
 mkdir -p "$T/bin"
 
 RT_OLD=com.apple.CoreSimulator.SimRuntime.iOS-26-0
@@ -52,6 +53,7 @@ case "\$*" in
   "simctl list devicetypes --json") cat "$T/devicetypes.json" ;;
   "simctl list devices --json") cat "$T/devices.json" ;;
   "simctl create "*) echo "$NEW_UDID" ;;
+  "simctl bootstatus "*) if [ -e "$T/hang" ]; then echo "\$\$" >> "$T/hung"; exec sleep 30; fi ;;
 esac
 exit 0
 SHIM
@@ -122,6 +124,18 @@ printf '{"devicetypes":[]}\n' > "$T/devicetypes.json"
 run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/roast-conductor
 if [ "$RC" -ne 0 ] && ! grep -q "^simctl create" "$T/calls"; then ok "an unknown model fails without creating anything"
 else bad "unknown model: rc $RC, calls $(calls_for)"; fi
+
+# 7. A boot that never finishes (wedged bootstatus) fails within the bound, naming the simulator, so
+# the job fails and releases the host build lock instead of holding it for the whole step.
+printf '{"devicetypes":[{"name":"iPhone 18 Pro","identifier":"%s"}]}\n' "$PRO18" > "$T/devicetypes.json"
+touch "$T/hang"
+start=$SECONDS
+run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/roast-conductor CI_SIM_BOOT_TIMEOUT=3
+took=$((SECONDS - start))
+rm -f "$T/hang"
+if [ "$RC" -ne 0 ] && [ "$took" -lt 20 ] && grep -q "RoastConductor-CI-iPhone ($NEW_UDID) did not boot within 3 seconds" "$T/err"; then
+  ok "a wedged boot fails in ${took}s with an error naming the simulator"
+else bad "wedged boot: rc $RC after ${took}s, stderr: $(tr '\n' '|' < "$T/err")"; fi
 
 echo
 if [ "$FAIL" -ne 0 ]; then echo "$PASS passed, $FAIL FAILED"; exit 1; fi

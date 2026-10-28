@@ -17,7 +17,10 @@ name: Self-test
 #   - Context budget: this repo's own check against .github/context-budget.txt;
 #   - Shared script tests (ops #345): the tools/ios guards for the iOS workflows (reap selection,
 #     preboot naming, retry classification, build-lock fallback, Lockfile gate and check) and the
-#     tools/ci gitleaks installer, with shellcheck; all against stubs, never a real simulator or Xcode;
+#     tools/ci gitleaks installer, with shellcheck; all against stubs, never a real simulator or Xcode.
+#     The structure of ios-ci.yml and ios-testflight.yml (Xcode runner, reaps, the lock around every
+#     Xcode step, timeouts, a light Lockfile gate) is checked by tools/ios/test_workflow_structure.py,
+#     which the OpenSpec tools job runs with the other tools/ios unit tests;
 #   - Light routing: em-dash-check with no runs-on, a raw label and a JSON string all start on hosted
 #     Ubuntu (this repo is public, so the organisation's LIGHT_RUNNER is not visible to it).
 

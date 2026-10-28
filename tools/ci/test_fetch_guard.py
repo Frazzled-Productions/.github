@@ -1,8 +1,10 @@
-"""Tests for the "Fetch the shared OpenSpec tools" step in the openspec-*.yml reusable workflows.
+"""Tests for the "Fetch the shared OpenSpec tools" step in the reusable workflows.
 
 Run: python3 -m unittest discover -s tools/ci -p 'test_*.py'   (needs git and access to github.com)
 
-The step is copied into each workflow, so the test first checks every copy is identical, then runs it
+The step is copied into each workflow that runs a script from this repository (the openspec-*.yml
+workflows, context-budget, and since ops #345 ios-ci, ios-testflight, secret-scan and em-dash-check),
+so the test first checks every copy is identical, then runs it
 with a made-up job context: a commit SHA and an annotated tag object's SHA must fetch that commit; a
 non-SHA, an unknown SHA or a bad repository name must fail before any tool is used.
 """
@@ -15,7 +17,13 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-WORKFLOWS = sorted((ROOT / ".github/workflows").glob("openspec-*.yml"))
+# Copies of the step per workflow file. ios-ci has three jobs that fetch, openspec-archive two.
+COPIES = {
+    "context-budget.yml": 1, "em-dash-check.yml": 1, "ios-ci.yml": 3, "ios-testflight.yml": 1,
+    "openspec-archive.yml": 2, "openspec-changed-files.yml": 1, "openspec-docs-check.yml": 1,
+    "openspec-overlap.yml": 1, "openspec-required.yml": 1, "secret-scan.yml": 1,
+}
+WORKFLOWS = sorted((ROOT / ".github/workflows").glob("*.yml"))
 STEP = "- name: Fetch the shared OpenSpec tools at this workflow's commit"
 REPO = "Frazzled-Productions/.github"
 # v1.1.0 is an annotated tag on 8ca80e1 (the release holding the shared OpenSpec workflows).
@@ -47,7 +55,8 @@ def git(*args):
 class FetchGuard(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.scripts = [s for w in WORKFLOWS for s in fetch_steps(w.read_text(encoding="utf-8"))]
+        cls.per_file = {w.name: fetch_steps(w.read_text(encoding="utf-8")) for w in WORKFLOWS}
+        cls.scripts = [s for scripts in cls.per_file.values() for s in scripts]
         out = git("ls-remote", f"https://github.com/{REPO}", f"refs/tags/{TAG}", f"refs/tags/{TAG}^{{}}")
         refs = dict(reversed(line.split("\t")) for line in out.splitlines())
         cls.tag_object = refs[f"refs/tags/{TAG}"]
@@ -65,7 +74,8 @@ class FetchGuard(unittest.TestCase):
             return proc.returncode, head, proc.stdout + proc.stderr
 
     def test_every_workflow_has_the_same_step(self):
-        self.assertEqual(len(self.scripts), len(WORKFLOWS) + 1)  # openspec-archive.yml has two jobs
+        counts = {name: len(scripts) for name, scripts in self.per_file.items() if scripts}
+        self.assertEqual(counts, COPIES)
         self.assertEqual(len(set(self.scripts)), 1)
 
     def test_v1_1_0_is_annotated(self):

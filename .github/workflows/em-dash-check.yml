@@ -1,10 +1,17 @@
 name: Em-dash check (reusable)
 
-# House style bans em dashes (ops/standards/conventions.md). This checks only the lines a change
-# adds, so old text does not block new work; fix old hits as you touch them. Consumer:
+# House style, as one light job every repo calls (ops #345):
+#   - em dashes: house style bans them (ops/standards/conventions.md). This checks only the lines a
+#     change adds, so old text does not block new work; fix old hits as you touch them;
+#   - AI attribution: no AI-attribution trailer (koinori's pattern, any case) in the PR body or in the
+#     message of any commit the PR or push adds (tools/ci/trailer.py, fetched from this repository at
+#     this workflow's commit). Add `edited` to the caller's pull_request types so fixing the body
+#     re-runs the check.
+# Consumer:
 #
 #   on:
 #     pull_request:
+#       types: [opened, edited, synchronize, reopened]
 #     push:
 #       branches: [main]
 #   jobs:
@@ -16,8 +23,8 @@ name: Em-dash check (reusable)
 #
 # On pull_request it diffs the PR base against the head; on push it diffs the pushed range
 # (github.event.before..after). `exclude` takes git pathspec globs, one per line, for files that
-# may quote em dashes (third-party text, research notes). The character is written as chr(0x2014)
-# so this file contains none itself.
+# may quote em dashes (third-party text, research notes); it does not apply to the trailer check.
+# The character is written as chr(0x2014) so this file contains none itself.
 
 on:
   workflow_call:
@@ -27,9 +34,9 @@ on:
         type: string
         default: ''
       runs-on:
-        description: Runner label.
+        description: Runner labels as a JSON array or JSON string, or one raw label such as self-hosted. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
-        default: ubuntu-latest
+        default: ''
 
 permissions:
   contents: read
@@ -37,9 +44,33 @@ permissions:
 jobs:
   em-dash:
     name: No em dashes in added lines
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on == '' && fromJSON(vars.LIGHT_RUNNER || '"ubuntu-latest"') || (startsWith(inputs.runs-on, '[') || startsWith(inputs.runs-on, '"')) && fromJSON(inputs.runs-on) || inputs.runs-on }}
     timeout-minutes: 5
     steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -90,3 +121,12 @@ jobs:
               sys.exit(1)
           print("No em dashes in added lines.")
           PY
+
+      - name: No AI-attribution trailer in the PR body or added commits
+        if: ${{ !cancelled() }}
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.after }}
+        run: python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/ci/trailer.py"

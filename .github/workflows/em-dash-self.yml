@@ -3,6 +3,7 @@ name: Em-dash check
 # This repo's own caller, which also exercises the reusable workflow on every PR that changes it.
 on:
   pull_request:
+    types: [opened, edited, synchronize, reopened]
   push:
     branches: [main]
 

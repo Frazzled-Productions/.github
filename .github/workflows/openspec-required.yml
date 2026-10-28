@@ -40,9 +40,9 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: Runner labels as a JSON array, or a JSON string. Needs git, python3 and gh.
+        description: Runner labels as a JSON array, or a JSON string. Needs git, python3 and gh. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
-        default: '["self-hosted", "macOS", "ARM64"]'
+        default: ''
       budget-file:
         description: The repo's context budget file, which counts as docs.
         type: string
@@ -65,7 +65,7 @@ permissions:
 jobs:
   required:
     name: OpenSpec required
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.runs-on || vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
     concurrency:
       group: openspec-required-${{ github.event.pull_request.number || github.ref }}

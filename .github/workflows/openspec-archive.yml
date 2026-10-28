@@ -86,9 +86,9 @@ on:
         type: string
         required: true
       runs-on:
-        description: Runner labels as a JSON array, or a JSON string. Needs git, gh, jq, python3 and the openspec CLI.
+        description: Runner labels as a JSON array, or a JSON string. Needs git, gh, jq, python3 and the openspec CLI. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
-        default: '["self-hosted", "macOS", "ARM64"]'
+        default: ''
       install-openspec:
         description: Install the openspec CLI (@fission-ai/openspec 1.14.3 from npm) first, for a GitHub-hosted runner without it. Leave off on the self-hosted Mac.
         type: boolean
@@ -113,7 +113,7 @@ jobs:
   archive:
     name: Archive merged OpenSpec changes
     if: github.event_name != 'schedule'
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.runs-on || vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 15
     concurrency:
       group: openspec-archive-job
@@ -255,7 +255,7 @@ jobs:
   stuck:
     name: Check for a stuck archive PR
     if: github.event_name == 'schedule'
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.runs-on || vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
     concurrency:
       group: openspec-archive-stuck-job

@@ -35,9 +35,9 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: Runner labels as a JSON array, or a JSON string. Needs git and python3.
+        description: Runner labels as a JSON array, or a JSON string. Needs git and python3. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
-        default: '["self-hosted", "macOS", "ARM64"]'
+        default: ''
       budget-file:
         description: The budget file, relative to the repo root.
         type: string
@@ -49,7 +49,7 @@ permissions:
 jobs:
   budget:
     name: Context budget
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.runs-on || vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
     steps:
       - name: Fetch the shared OpenSpec tools at this workflow's commit

@@ -14,7 +14,12 @@ name: Self-test
 #     openspec/ (its tooling changes are specced in roast-conductor's openspec-tooling, Fraser,
 #     23 October 2026), and its result is checked: "adopt OpenSpec first" on a code PR, a pass on a
 #     docs-only one. The archive and docs-only check workflows are exercised by their callers;
-#   - Context budget: this repo's own check against .github/context-budget.txt.
+#   - Context budget: this repo's own check against .github/context-budget.txt;
+#   - Shared script tests (ops #345): the tools/ios guards for the iOS workflows (reap selection,
+#     preboot naming, retry classification, build-lock fallback, Lockfile gate and check) and the
+#     tools/ci gitleaks installer, with shellcheck; all against stubs, never a real simulator or Xcode;
+#   - Light routing: em-dash-check with no runs-on, a raw label and a JSON string all start on hosted
+#     Ubuntu (this repo is public, so the organisation's LIGHT_RUNNER is not visible to it).
 
 on:
   pull_request:
@@ -75,6 +80,47 @@ jobs:
           python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
           python3 -m unittest discover -s tools/openspec -p 'test_*.py' -v
           python3 -m unittest discover -s tools/liveness -p 'test_*.py' -v
+          python3 -m unittest discover -s tools/ios -p 'test_*.py' -v
+
+  shared-scripts:
+    name: Shared iOS and CI script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: shellcheck
+        run: shellcheck tools/ios/*.sh tools/ios/tests/*.sh tools/ci/*.sh
+      - name: tools/ios tests
+        run: |
+          set -euo pipefail
+          for t in tools/ios/tests/*.test.sh; do bash "$t"; done
+      - name: Install the pinned gitleaks through the shared installer
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/gitleaks-bin"
+          bash tools/ci/gitleaks-install.sh 8.30.1 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb \
+            b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5 "$RUNNER_TEMP/gitleaks-bin"
+          echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: gitleaks installer and HEAD-only scan
+        run: bash tools/ci/test-gitleaks-install.sh
+
+  route-default:
+    name: Light route, no runs-on
+    uses: ./.github/workflows/em-dash-check.yml # zizmor: ignore[self-repository]
+
+  route-raw-label:
+    name: Light route, raw label
+    uses: ./.github/workflows/em-dash-check.yml # zizmor: ignore[self-repository]
+    with:
+      runs-on: ubuntu-latest
+
+  route-json-string:
+    name: Light route, JSON string
+    uses: ./.github/workflows/em-dash-check.yml # zizmor: ignore[self-repository]
+    with:
+      runs-on: '"ubuntu-latest"'
 
   openspec-changed-files:
     name: OpenSpec changed files

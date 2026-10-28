@@ -29,9 +29,9 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: Runner labels as a JSON array, or a JSON string. Needs git and python3.
+        description: Runner labels as a JSON array, or a JSON string. Needs git and python3. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
-        default: '["self-hosted", "macOS", "ARM64"]'
+        default: ''
       base-branch:
         description: The branch a workflow_dispatch run is compared with.
         type: string
@@ -47,7 +47,7 @@ permissions:
 jobs:
   classify:
     name: Changed files
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.runs-on || vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
     outputs:
       docs-only: ${{ steps.classify.outputs.docs-only }}

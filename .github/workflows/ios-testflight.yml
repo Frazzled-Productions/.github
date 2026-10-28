@@ -1,9 +1,13 @@
 name: iOS TestFlight upload (reusable)
 
 # Reusable "archive and upload to TestFlight" for the quick iOS apps, run on the calling repo's
-# self-hosted Mac runner. Runs the engine tests, copies the Release RevenueCat key in from the build
-# Mac (checking it is gitignored), runs the app's own release script (which signs with the App Store
-# Connect API key) and always deletes the key file afterwards. Consumer (thin caller): it must run
+# self-hosted Mac runner. Copies the Release RevenueCat key in from the build Mac (checking it is
+# gitignored), then in ONE step under the host build lock (ops scripts/build-lock.sh; a warning and
+# no lock when it is missing) runs the engine tests and the app's own release script (which signs with
+# the App Store Connect API key), and always deletes the key file afterwards. A reap of this job's own
+# stray xcodebuild / simctl processes runs before and after (tools/ios/ci-sim.sh, fetched from this
+# repository at this workflow's commit). Timeouts: reap 3 minutes, the locked step 120 (up to 60 of
+# it waiting for the lock), the job `timeout-minutes` (130). ops #345. Consumer (thin caller): it must run
 # only after CI has passed on the same main commit, so it triggers on workflow_run of CI. The full
 # caller, with the gate job (tested SHA is still the tip of main; docs-only merges skipped), is
 # loop-year/.github/workflows/testflight-on-main.yml. Outline:
@@ -62,8 +66,9 @@ on:
         type: string
         default: '["self-hosted", "macOS", "ARM64"]'
       timeout-minutes:
+        description: Job timeout, including up to 60 minutes waiting for the build lock.
         type: number
-        default: 60
+        default: 130
 
 jobs:
   upload:
@@ -71,14 +76,37 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - name: Reap before
+        timeout-minutes: 3
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/ci-sim.sh" reap
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Engine tests must pass before shipping
-        env:
-          ENGINE_PACKAGE: ${{ inputs.engine-package }}
-        run: swift test --package-path "$ENGINE_PACKAGE"
 
       - name: Provide the Release RevenueCat key
         env:
@@ -90,16 +118,28 @@ jobs:
           chmod 600 Config/Secrets.xcconfig
           git check-ignore -q Config/Secrets.xcconfig || { rm -f Config/Secrets.xcconfig; echo "::error::Secrets.xcconfig is not gitignored"; exit 1; }
 
-      - name: Archive and upload
+      # One step, so one wait for the lock: the engine tests must pass before shipping.
+      - name: Engine tests, archive and upload (under the host build lock)
+        timeout-minutes: 120
         env:
+          ENGINE_PACKAGE: ${{ inputs.engine-package }}
           ASC_KEY_ID: ${{ inputs.asc-key-id }}
           ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
           RELEASE_SCRIPT: ${{ inputs.release-script }}
-        run: zsh "$RELEASE_SCRIPT"
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/with-build-lock.sh" \
+            --label "${GITHUB_REPOSITORY#*/} TestFlight" -- \
+            bash -c 'swift test --package-path "$ENGINE_PACKAGE" && zsh "$RELEASE_SCRIPT"'
 
       - name: Remove the key file
         if: always()
         run: rm -f Config/Secrets.xcconfig
+
+      - name: Reap after
+        if: always()
+        timeout-minutes: 3
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/ci-sim.sh" reap
 
       - name: Summary
         if: success()

@@ -1,9 +1,8 @@
 name: iOS CI (reusable)
 
 # Reusable CI for the quick iOS apps (XcodeGen project + a local engine Swift package), run on the
-# calling repo's self-hosted Mac runner so no paid GitHub macOS minutes are used. Checks, in order:
-# the committed .xcodeproj matches project.yml, no em dashes anywhere (house style), engine tests,
-# app tests on the simulator. Consumer (thin caller in the app repo):
+# calling repo's self-hosted Mac runner so no paid GitHub macOS minutes are used. Consumer (thin
+# caller in the app repo):
 #
 #   jobs:
 #     test:
@@ -14,8 +13,26 @@ name: iOS CI (reusable)
 #         scheme: LoopYear
 #         engine-package: LoopYearEngine
 #
-# Triggers and concurrency stay in the caller. Jobs run on the caller's own runners, so each app
-# keeps its own runner instance (ops/standards/new-ios-app-playbook.md, section 5).
+# Triggers and concurrency stay in the caller. Em dashes and AI attribution are checked by the shared
+# light house-style job (em-dash-check.yml), which every app calls; this workflow no longer scans them.
+#
+# Jobs (ops #345):
+#   - Engine and app tests, on the caller's own runner (default [self-hosted, macOS, ARM64], never the
+#     light pool): the committed .xcodeproj matches project.yml, then ONE step under the host build
+#     lock (ops scripts/build-lock.sh; a warning and no lock when it is missing) runs the engine tests,
+#     erases and boots the repo's own CI simulator (`ci-simulator-name`, default the repo name in
+#     PascalCase plus -CI-iPhone, of the `simulator` model on the newest iOS runtime) and runs the app
+#     tests on its UDID with per-test timeouts, retried once only on the simulator launch failure.
+#     A reap of this job's own stray xcodebuild / simctl processes and CI simulator runs before and
+#     after. Timeouts: reap 3 minutes, XcodeGen 5, the locked step 90 (up to 60 of it waiting for the
+#     lock), the job `timeout-minutes` (100).
+#   - Lockfile gate, on a light runner: does the change touch Package.resolved, project.pbxproj,
+#     project.yml, the engine package, a Package.swift or a workflow (or is the file list unknown)?
+#   - Lockfile records what the build resolves, on the caller's runner, only when the gate says so
+#     and `lockfile` is on: every resolved remote package is pinned and resolving leaves
+#     Package.resolved unchanged. Locked step 75 minutes, job 85.
+# The scripts (tools/ios/) are fetched from this repository at this workflow's own commit, so an app
+# PR cannot change the guard it is judged by.
 
 on:
   workflow_call:
@@ -33,16 +50,32 @@ on:
         type: string
         required: true
       simulator:
-        description: Simulator device name for the app tests.
+        description: Device model of the CI simulator, e.g. iPhone 18 Pro.
         type: string
         default: iPhone 18 Pro
+      ci-simulator-name:
+        description: Name of this repo's own CI simulator. Empty means the repo name in PascalCase plus -CI-iPhone (roast-conductor gives RoastConductor-CI-iPhone).
+        type: string
+        default: ''
+      test-time-allowance:
+        description: Seconds each test may run before XCTest fails it (-default-test-execution-time-allowance).
+        type: number
+        default: 120
+      lockfile:
+        description: Run the Lockfile check when a package, project or workflow file changes.
+        type: boolean
+        default: true
       runs-on:
-        description: Runner labels as a JSON array.
+        description: Runner labels for the Xcode jobs as a JSON array.
         type: string
         default: '["self-hosted", "macOS", "ARM64"]'
       timeout-minutes:
+        description: Job timeout for Engine and app tests, including up to 60 minutes waiting for the build lock.
         type: number
-        default: 30
+        default: 100
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -54,12 +87,45 @@ jobs:
       SCHEME: ${{ inputs.scheme }}
       ENGINE_PACKAGE: ${{ inputs.engine-package }}
       SIMULATOR: ${{ inputs.simulator }}
+      CI_SIMULATOR_NAME: ${{ inputs.ci-simulator-name }}
+      ALLOWANCE: ${{ inputs.test-time-allowance }}
     steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - name: Reap before
+        timeout-minutes: 3
+        env:
+          CI_SIMULATOR_NAME: ${{ inputs.ci-simulator-name }}
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/ci-sim.sh" reap
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Xcode project matches project.yml
+        timeout-minutes: 5
         run: |
           xcodegen generate --quiet
           if ! git diff --quiet -- "$PROJECT"; then
@@ -68,33 +134,132 @@ jobs:
             exit 1
           fi
 
-      # The character is written as chr(0x2014) so this file contains no em dash itself, and so an
-      # agent that turns a typed escape back into the character cannot break the check.
-      - name: No em dashes (house style)
+      # One step, so one wait for the lock. The app tests run on this repo's own erased CI simulator,
+      # by UDID, and are retried once only on the simulator launch-failure signature.
+      - name: Engine and app tests (under the host build lock)
+        timeout-minutes: 90
         run: |
-          python3 - <<'PY'
-          import os, sys
-          bad = []
-          for root, dirs, files in os.walk('.'):
-              dirs[:] = [d for d in dirs if d not in ('.git', 'build', '.build')]
-              for name in files:
-                  path = os.path.join(root, name)
-                  try:
-                      text = open(path, encoding='utf-8').read()
-                  except (UnicodeDecodeError, OSError):
-                      continue
-                  if chr(0x2014) in text:
-                      bad.append(path)
-          if bad:
-              print('::error::Em dashes found (house style bans them): ' + ', '.join(bad))
-              sys.exit(1)
-          PY
+          set -euo pipefail
+          export IOS_TOOLS="$RUNNER_TEMP/frazzled-openspec-tools/tools/ios"
+          bash "$IOS_TOOLS/with-build-lock.sh" --label "${GITHUB_REPOSITORY#*/} CI" -- bash -c '
+            set -euo pipefail
+            swift test --package-path "$ENGINE_PACKAGE"
+            udid=$(bash "$IOS_TOOLS/ci-sim.sh" preboot "$SIMULATOR" | tail -n1)
+            bash "$IOS_TOOLS/retry-test-on-launch-failure.sh" "$udid" \
+              xcodebuild test -project "$PROJECT" -scheme "$SCHEME" \
+              -destination "platform=iOS Simulator,id=$udid" -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES -default-test-execution-time-allowance "$ALLOWANCE" \
+              -derivedDataPath build/ci CODE_SIGNING_ALLOWED=NO -quiet'
 
-      - name: Engine tests
-        run: swift test --package-path "$ENGINE_PACKAGE"
+      - name: Reap after
+        if: always()
+        timeout-minutes: 3
+        env:
+          CI_SIMULATOR_NAME: ${{ inputs.ci-simulator-name }}
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/ci-sim.sh" reap
 
-      - name: App tests (simulator)
+  lockfile-gate:
+    name: Lockfile gate
+    if: inputs.lockfile
+    # Light: git and python3 only, never the Xcode runner.
+    runs-on: ${{ fromJSON(vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
         run: |
-          xcodebuild test -project "$PROJECT" -scheme "$SCHEME" \
-            -destination "platform=iOS Simulator,name=$SIMULATOR" \
-            -derivedDataPath build/ci CODE_SIGNING_ALLOWED=NO -quiet
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - id: gate
+        name: Can this change alter the package graph?
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.after }}
+          ENGINE_PACKAGE: ${{ inputs.engine-package }}
+        run: python3 "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/lockfile_gate.py"
+
+  lockfile:
+    name: Lockfile records what the build resolves
+    needs: lockfile-gate
+    if: needs.lockfile-gate.outputs.run == 'true'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 85
+    env:
+      PROJECT: ${{ inputs.project }}
+      SCHEME: ${{ inputs.scheme }}
+    steps:
+      - name: Fetch the shared OpenSpec tools at this workflow's commit
+        env:
+          # job.workflow_repository and job.workflow_sha name this reusable workflow's own repository and
+          # commit (GitHub's contexts reference). Read through toJSON(job) because actionlint 1.7.12
+          # does not know those two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-openspec-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha is the commit, or the tag object when the caller references an annotated tag.
+          # Either way it names exactly one commit, and that must be what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          if [ "$(git -C "$tools" rev-parse "FETCH_HEAD^{commit}")" != "$want" ] || [ "$(git -C "$tools" rev-parse HEAD)" != "$want" ]; then
+            echo "::error::Fetched the wrong tools commit."; exit 1
+          fi
+          echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
+
+      - name: Reap before
+        timeout-minutes: 3
+        env:
+          CI_SIMULATOR_NAME: ${{ inputs.ci-simulator-name }}
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/ci-sim.sh" reap
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Resolve, then compare with the lockfile (under the host build lock)
+        timeout-minutes: 75
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/frazzled-openspec-tools/tools/ios"
+          bash "$tools/with-build-lock.sh" --label "${GITHUB_REPOSITORY#*/} Lockfile" -- \
+            bash "$tools/lockfile-check.sh" "$PROJECT" "$SCHEME"
+
+      - name: Reap after
+        if: always()
+        timeout-minutes: 3
+        env:
+          CI_SIMULATOR_NAME: ${{ inputs.ci-simulator-name }}
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ios/ci-sim.sh" reap

@@ -36,9 +36,9 @@ on:
         type: string
         default: Docs-only check
       runs-on:
-        description: Runner labels as a JSON array, or a JSON string. Needs git, python3 and the openspec CLI.
+        description: Runner labels as a JSON array, or a JSON string. Needs git, python3 and the openspec CLI. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
-        default: '["self-hosted", "macOS", "ARM64"]'
+        default: ''
       install-openspec:
         description: Install the openspec CLI (@fission-ai/openspec 1.14.3 from npm) first, for a GitHub-hosted runner without it. Leave off on the self-hosted Mac.
         type: boolean
@@ -50,7 +50,7 @@ permissions:
 jobs:
   docs:
     name: ${{ inputs.job-name }}
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    runs-on: ${{ fromJSON(inputs.runs-on || vars.LIGHT_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 10
     env:
       OPENSPEC_TELEMETRY: '0'

@@ -6,6 +6,28 @@ The org's shared GitHub config + **reusable CI/automation workflows** - the work
 `frazzled-claude` plugin is archived). `profile/README.md` is the public org page; everything else here is org-internal.
 
 ## Reusable workflows (`.github/workflows/`)
+
+**Runner default (ops #345, from `v1.6.0`).** Every job that needs no Xcode (context budget, the five
+OpenSpec workflows, test integrity, em-dash check, secret scan and the Lockfile gate) runs on the
+caller's `runs-on` input when it passes one, otherwise on
+`fromJSON(vars.LIGHT_RUNNER || '"ubuntu-latest"')`; their `runs-on` input defaults to `''`.
+`LIGHT_RUNNER` is an organisation variable (`["light"]`, the two light runners on the Mac) visible to
+private repositories only, and a reusable workflow reads `vars` as the caller's repository sees them:
+a private caller that passes nothing lands on the light pool, a public one (website, poke-memory, this
+repo) on GitHub-hosted `ubuntu-latest`. A repo-level `LIGHT_RUNNER` overrides it for one repo.
+`em-dash-check` and `secret-scan` also still accept one raw label (`runs-on: self-hosted`). The Xcode
+jobs (`ios-ci`, its Lockfile job, `ios-testflight`) keep `["self-hosted", "macOS", "ARM64"]`, the
+app's own runner.
+
+**Shared scripts (`tools/ios/`, `tools/ci/`).** The iOS workflows run `tools/ios/` (`ci-sim.sh` reap
+and preboot, `retry-test-on-launch-failure.sh`, `with-build-lock.sh`, `lockfile_gate.py`,
+`lockfile-check.sh`, generalised from koinori `origin/qa` 217b3f179), the secret scan
+`tools/ci/gitleaks-install.sh` and the em-dash check `tools/ci/trailer.py`, each fetched from this
+repository at the workflow's own commit, as the OpenSpec workflows do (below). Their tests run in
+`self-test.yml` on hosted Ubuntu against stubs, never a real simulator.
+
+**`@main` pins.** plan-bee's `em-dash-check` and koinori-web's `em-dash-check` and `secret-scan`
+callers pin `@main`, so they get a merge here at once, before any tag moves.
 - **`ci.yml`** - parameterised CI (`workflow_call`): install + optional lint / typecheck / test / build,
   configurable node version + working directory. Stack-agnostic (Next, Expo, plain Node).
   **Unused:** no repo calls it (checked 2026-10-17). Kept as a starting point for the npm repos;
@@ -23,16 +45,29 @@ jobs:
       test: npm test
       build: npm run build
 ```
-- **`em-dash-check.yml`** - fails when a PR or push adds a line containing an em dash (house style).
-  Diff-only, so old text never blocks new work. Input: `exclude` (git pathspec globs, one per line).
-  Used by plan-bee, website, koinori-web and ops (checked 2026-10-23); the iOS apps get the check
-  from `ios-ci.yml`.
-- **`ios-ci.yml`** - CI for the quick iOS apps (`workflow_call`): XcodeGen project check, no em
-  dashes, engine package tests, app tests on the simulator, on the caller's self-hosted Mac runner.
-  Inputs: `project`, `scheme`, `engine-package`, optional `simulator`, `runs-on`, `timeout-minutes`.
+- **`em-dash-check.yml`** - the house-style job: fails when a PR or push adds a line containing an
+  em dash, or when the PR body or a commit message the PR or push adds carries an AI-attribution
+  trailer (koinori's pattern, any case; `tools/ci/trailer.py`). Diff-only, so old text never blocks new
+  work. Inputs: `exclude` (git pathspec globs, one per line, em dashes only), `runs-on`. Callers add
+  `edited` to their `pull_request` types so fixing the body re-runs it. Used by plan-bee, website,
+  koinori-web and ops (checked 2026-10-23); the iOS apps call it too from ops #345 (`ios-ci.yml` no
+  longer scans em dashes).
+- **`ios-ci.yml`** - CI for the quick iOS apps (`workflow_call`), on the caller's self-hosted Mac
+  runner: XcodeGen project check, then one step under the host build lock (ops
+  `scripts/build-lock.sh`; a warning and no lock when it is missing) with the engine package tests and
+  the app tests on the repo's own CI simulator (created if missing, erased and booted; named by
+  `ci-simulator-name`, default the repo name in PascalCase plus `-CI-iPhone`), with
+  `-test-timeouts-enabled YES` and one retry only on the simulator launch failure. A reap of the job's
+  own workspace processes and CI simulator runs before and after. A light Lockfile gate decides
+  whether the Lockfile job (every resolved package pinned, resolution leaves `Package.resolved`
+  unchanged) needs the Mac. Inputs: `project`, `scheme`, `engine-package`, optional `simulator` (device
+  model, `iPhone 18 Pro`), `ci-simulator-name`, `test-time-allowance` (120 s), `lockfile` (on),
+  `runs-on`, `timeout-minutes` (100, which covers up to 60 minutes waiting for the lock).
   Used by Loop Year and Roast Conductor.
-- **`ios-testflight.yml`** - archive and upload to TestFlight (`workflow_call`): engine tests, the
-  Release RevenueCat key copied in and removed afterwards, the app's own `tools/release/testflight.sh`.
+- **`ios-testflight.yml`** - archive and upload to TestFlight (`workflow_call`): the Release
+  RevenueCat key copied in and removed afterwards, then the engine tests and the app's own
+  `tools/release/testflight.sh` in one step under the host build lock, with a reap before and after.
+  Job timeout default 130 minutes (lock wait plus archive).
   Inputs: `engine-package`, `secrets-xcconfig`, `asc-key-id`, `asc-issuer-id`, optional
   `release-script`, `runs-on`, `timeout-minutes`. Consumer snippets are in each file's header.
   The caller must run it only after CI passes on the same main commit (`workflow_run` on CI plus a
@@ -44,9 +79,12 @@ jobs:
   `extra-test-pattern`, `extra-snapshot-pattern`, `pr-number` (check a bot PR from a
   `workflow_dispatch` run on its branch). OpenSpec files (`openspec/**`) never count as tests. The caller needs `pull-requests: write` and the
   `edited` PR event type, so fixing the PR body re-runs it. Snippet in the file header.
-- **`secret-scan.yml`** - gitleaks over the caller's full history (`workflow_call`), pinned by version
-  and checksum. Lifted from koinori's own `secret-scan.yml`. Free alternative to GitHub secret
-  scanning on private repos. Inputs: optional `gitleaks-version`, `gitleaks-sha256`, `runs-on`.
+- **`secret-scan.yml`** - gitleaks over the history reachable from the caller's HEAD (`workflow_call`;
+  a stale fetched ref on a self-hosted workspace is not scanned), pinned by version and a checksum per
+  platform. Runs on Linux X64 and macOS ARM64 (the light runners), installed into the job's temp folder
+  with no sudo. Lifted from koinori's own `secret-scan.yml`. Free alternative to GitHub secret scanning
+  on private repos. Inputs: optional `gitleaks-version`, `gitleaks-sha256` (linux_x64),
+  `gitleaks-sha256-darwin-arm64`, `runs-on`.
 
 ### OpenSpec tooling
 Moved here from roast-conductor (owner decision 23 October 2026, `ops/research/openspec-trial-2026-10-21.md`,
@@ -55,9 +93,9 @@ these fetches its Python and shell tools from **this repository at the commit th
 (`job.workflow_sha`, the tag or SHA the caller pins; an annotated tag is resolved to its commit) into
 the runner's temp folder, never from the
 caller's tree, so a PR cannot change the guard it is judged by. The tools and their tests live in
-`tools/openspec/` and `tools/ci/`; `self-test.yml` runs the tests on every PR here. Runner default:
-`["self-hosted", "macOS", "ARM64"]` (git, gh, jq, python3 and the Homebrew `openspec` CLI), so no paid
-GitHub-hosted minutes. Snippets are in each file's header.
+`tools/openspec/` and `tools/ci/`; `self-test.yml` runs the tests on every PR here. Runner default: the
+light route above (the light runners have git, gh, jq, python3 and the Homebrew `openspec` CLI); a
+caller on GitHub-hosted runners passes `install-openspec: true`. Snippets are in each file's header.
 - **`openspec-archive.yml`** - the archive bot. On the caller's push to the base branch (or "Run
   workflow") it archives each merged change with `openspec archive <name> --yes`, checks the result
   (`tools/openspec/archive.py`), pushes the archive branch, opens the PR, approves that PR's own held
@@ -144,7 +182,9 @@ Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs i
 OpenSpec tools' unit tests (with the `openspec` CLI from npm at a pinned version), and the
 `openspec-changed-files`, `openspec-overlap` (through `install-openspec`) and `openspec-required`
 (warn-only, its "adopt OpenSpec first" result checked) workflows against this repo, proving the tools
-fetch. `Context budget` checks this repo's own `.github/context-budget.txt`.
+fetch. `Context budget` checks this repo's own `.github/context-budget.txt`. From ops #345 it also
+runs the `tools/ios` and `tools/ci` script tests with shellcheck, and calls `em-dash-check` with no
+`runs-on`, a raw label and a JSON string, proving each routing form starts.
 
 `main` is protected by a repo ruleset: changes land by PR only, and `actionlint and zizmor` plus
 `Test integrity / Test integrity` must pass (admins can bypass only through a PR).
@@ -162,6 +202,13 @@ tag moves. `v1.0.0` (2026-10-17) is the first release.
    another tag.
 4. A breaking change (renamed or removed input, new required secret) gets a new major tag (`v2`) and
    a PR in each caller; `v1` stays where it is.
+
+**`v1.6.0` (ops #345, light-runner-shared-ci).** Light jobs default to the light route; `ios-ci` and
+`ios-testflight` gain the reap, the per-repo CI simulator, layered timeouts, one launch retry and the
+host build lock; `ios-ci` gains the gated Lockfile job and loses its em-dash step; `secret-scan` runs on
+Mac and Linux and scans HEAD only; `em-dash-check` gains the AI-attribution check. Every input change
+is additive or a default, so it is a minor release. `v1` moves to it at the all-at-once landing with
+the five companion changes, after the house-style job has run on each caller's latest PR.
 
 ```yaml
 jobs:

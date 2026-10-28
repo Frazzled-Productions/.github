@@ -7,8 +7,8 @@
 #   ci-sim.sh reap              kill this job's stray xcodebuild / simctl processes and shut its CI
 #                               simulator down. Run before the work and as an `if: always()` step.
 #   ci-sim.sh preboot <model>   create (if missing), erase and boot this repo's CI simulator of device
-#                               model <model> (e.g. "iPhone 18 Pro") on the newest iOS runtime, and
-#                               print its UDID on the LAST line of stdout.
+#                               model <model> (e.g. "iPhone 18 Pro") on the newest iOS runtime that
+#                               supports that model, and print its UDID on the LAST line of stdout.
 #
 # The CI simulator is named $CI_SIMULATOR_NAME, or when that is empty the repository name from
 # $GITHUB_REPOSITORY in PascalCase plus "-CI-iPhone" (roast-conductor gives RoastConductor-CI-iPhone).
@@ -163,30 +163,18 @@ reap_select() {
 }
 
 # preboot <model>: resolve (creating if needed) this repo's CI simulator of <model> on the newest
-# available iOS runtime, erase it (so the post-test `simctl diagnose` sweep has almost no backlog,
-# koinori #917) and boot it. A device of that name but another model is deleted and recreated, so the
-# device never drifts. Progress goes to stderr; the UDID is the last line of stdout.
+# available iOS runtime that supports <model>, erase it (so the post-test `simctl diagnose` sweep has
+# almost no backlog, koinori #917) and boot it. A device of that name but another model is deleted and
+# recreated, so the device never drifts; so is one left on a runtime that is unavailable or no longer
+# supports <model>. A failed create fails the step (roast-conductor run 40748691093 passed simctl's
+# error text on as the UDID). Progress goes to stderr; the UDID is the last line of stdout.
 preboot() {
-  local model="${1:-}" name runtime_id device_type found udid
+  local model="${1:-}" name sel runtime_id fits device_type found udid stale err rc=0
   if [ -z "${model}" ]; then
     echo "::error::usage: ci-sim.sh preboot <device model, e.g. iPhone 18 Pro>" >&2
     exit 2
   fi
   name=$(ci_name) || exit 1
-
-  runtime_id=$(xcrun simctl list runtimes --json | python3 -c '
-import sys, json
-rts = [r for r in json.load(sys.stdin).get("runtimes", [])
-       if r.get("isAvailable") and r.get("platform", "iOS") == "iOS"
-       and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
-def key(r):
-    return [int(x) for x in r.get("version", "0").split(".") if x.isdigit()]
-print(max(rts, key=key)["identifier"] if rts else "")
-')
-  if [ -z "${runtime_id}" ]; then
-    echo "::error::No available iOS simulator runtime found." >&2
-    exit 1
-  fi
 
   device_type=$(xcrun simctl list devicetypes --json | python3 -c '
 import sys, json
@@ -198,6 +186,52 @@ print(t["identifier"] if t else "")
     echo "::error::No simulator device type called '${model}'." >&2
     exit 1
   fi
+
+  # The newest available iOS runtime whose supportedDeviceTypes has the model (a new point release can
+  # drop it: iOS 27.1 does not support iPhone 18 Pro), then every runtime that fits, space-separated.
+  # Otherwise ERROR:<the runtimes checked>.
+  sel=$(xcrun simctl list runtimes --json | python3 -c '
+import sys, json
+want = sys.argv[1]
+rts = [r for r in json.load(sys.stdin).get("runtimes", [])
+       if r.get("isAvailable") and r.get("platform", "iOS") == "iOS"
+       and r.get("identifier", "").startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]
+def key(r):
+    return [int(x) for x in r.get("version", "0").split(".") if x.isdigit()]
+rts.sort(key=key, reverse=True)
+ok = [r for r in rts if any(t.get("identifier") == want for t in r.get("supportedDeviceTypes", []))]
+print(" ".join(r["identifier"] for r in ok) if ok
+      else "ERROR:" + (", ".join(r["identifier"] for r in rts) or "none"))
+' "${device_type}")
+  case "${sel}" in
+    ERROR:*|"")
+      echo "::error::No available iOS simulator runtime supports ${model} (${device_type}); runtimes checked: ${sel#ERROR:}." >&2
+      exit 1
+      ;;
+  esac
+  runtime_id="${sel%% *}"
+  fits="${sel}"
+
+  # Devices of this name left on another runtime that is unavailable or does not support the model
+  # (or that simctl marks unavailable): deleted so the device is recreated on the chosen runtime.
+  # Never another name, never the default GUI simulator.
+  stale=$(xcrun simctl list devices --json | python3 -c '
+import sys, json
+runtime_id, name, fits, guard = sys.argv[1], sys.argv[2], sys.argv[3].split(), sys.argv[4]
+for rt, ds in json.load(sys.stdin).get("devices", {}).items():
+    if rt == runtime_id:
+        continue
+    for d in ds:
+        udid = d.get("udid") or ""
+        if d.get("name") == name and udid and not udid.startswith(guard) \
+           and (rt not in fits or d.get("isAvailable") is False):
+            print(udid)
+' "${runtime_id}" "${name}" "${fits}" "${DEFAULT_GUI_SIM_PREFIX}")
+  for udid in ${stale}; do
+    echo "Existing ${name} (${udid}) is on an unavailable runtime or one without ${model}; deleting it." >&2
+    xcrun simctl shutdown "${udid}" 2>/dev/null || true
+    xcrun simctl delete "${udid}" 2>/dev/null || true
+  done
 
   # An existing device of this name on the runtime: its UDID if it is the right model, else
   # WRONGTYPE:<udid> so it is recreated.
@@ -227,7 +261,16 @@ else:
 
   if [ -z "${udid}" ]; then
     echo "Creating CI simulator '${name}' (${model}) on ${runtime_id}." >&2
-    udid=$(xcrun simctl create "${name}" "${device_type}" "${runtime_id}")
+    err=$(mktemp "${TMPDIR:-/tmp}/cisim-create.XXXXXX")
+    udid=$(xcrun simctl create "${name}" "${device_type}" "${runtime_id}" 2>"${err}") || rc=$?
+    # Anything but a bare UUID (simctl prints its error text on stdout too) fails here, so it never
+    # reaches xcodebuild as a destination.
+    if [ "${rc}" -ne 0 ] || ! printf '%s' "${udid}" | grep -Eqix '[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}'; then
+      echo "::error::Could not create the CI simulator ${name} (${model}) on ${runtime_id} (exit ${rc}): $(tr '\n' ' ' < "${err}") ${udid}" >&2
+      rm -f "${err}"
+      exit 1
+    fi
+    rm -f "${err}"
   fi
   if [ -z "${udid}" ]; then
     echo "::error::Could not resolve or create the CI simulator ${name}." >&2
@@ -249,7 +292,8 @@ else:
   # step would otherwise hold the host build lock for the whole step. bootstatus is exec'd so the
   # alarm lands on it; stdout goes to /dev/null so a leftover child never holds the caller's
   # `$(... | tail -n1)` pipe open. SIGALRM gives 142; any other failure stays tolerated as before.
-  local boot_limit="${CI_SIM_BOOT_TIMEOUT:-180}" rc=0
+  local boot_limit="${CI_SIM_BOOT_TIMEOUT:-180}"
+  rc=0
   perl -e 'alarm shift; exec @ARGV' "${boot_limit}" \
     bash -c 'xcrun simctl boot "$1" >/dev/null 2>&1; exec xcrun simctl bootstatus "$1" -b' _ "${udid}" \
     >/dev/null 2>&1 || rc=$?

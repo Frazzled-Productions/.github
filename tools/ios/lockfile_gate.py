@@ -42,7 +42,8 @@ def decide(event, base, head, engine_package, cwd=None):
         return True, f"{event or 'unknown'} event: changed files unknown"
     if not base or not head:
         return True, "no commit range: changed files unknown"
-    proc = subprocess.run(["git", "diff", "--name-only", spec], cwd=cwd, capture_output=True, text=True)
+    # --no-renames: a rename lists only the new path, so Package.resolved renamed away would be hidden.
+    proc = subprocess.run(["git", "diff", "--name-only", "--no-renames", spec], cwd=cwd, capture_output=True, text=True)
     if proc.returncode != 0:
         return True, f"git diff {spec} failed: changed files unknown"
     files = [line for line in proc.stdout.splitlines() if line]

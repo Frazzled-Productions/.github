@@ -60,7 +60,8 @@ jobs:
   `-test-timeouts-enabled YES` and one retry only on the simulator launch failure. A reap of the job's
   own workspace processes and CI simulator runs before and after. A light Lockfile gate decides
   whether the Lockfile job (every resolved package pinned, resolution leaves `Package.resolved`
-  unchanged) needs the Mac. Inputs: `project`, `scheme`, `engine-package`, optional `simulator` (device
+  unchanged; with no `Package.resolved`, it fails if the build resolves any remote package) needs the
+  Mac. Inputs: `project`, `scheme`, `engine-package`, optional `simulator` (device
   model, `iPhone 18 Pro`), `ci-simulator-name`, `test-time-allowance` (120 s), `lockfile` (on),
   `runs-on`, `timeout-minutes` (100, which covers up to 60 minutes waiting for the lock).
   Used by Loop Year and Roast Conductor.

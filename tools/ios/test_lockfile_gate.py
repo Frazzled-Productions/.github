@@ -79,6 +79,16 @@ class Decide(unittest.TestCase):
         pathlib.Path(repo, "project.yml").write_text("name: App\n")
         git(repo, "add", "."); git(repo, "commit", "-q", "-m", "project")
         cls.project = git(repo, "rev-parse", "HEAD")
+        lock = pathlib.Path(repo, "App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")
+        lock.parent.mkdir(parents=True)
+        lock.write_text('{"pins": [], "version": 3}\n')
+        git(repo, "add", "."); git(repo, "commit", "-q", "-m", "lock")
+        cls.locked = git(repo, "rev-parse", "HEAD")
+        git(repo, "mv", str(lock), str(lock) + ".old"); git(repo, "commit", "-q", "-m", "rename the lockfile away")
+        cls.renamed = git(repo, "rev-parse", "HEAD")
+        git(repo, "checkout", "-q", cls.locked)
+        git(repo, "rm", "-q", str(lock)); git(repo, "commit", "-q", "-m", "delete the lockfile")
+        cls.deleted = git(repo, "rev-parse", "HEAD")
 
     @classmethod
     def tearDownClass(cls):
@@ -98,6 +108,13 @@ class Decide(unittest.TestCase):
 
     def test_push_range_with_project_yml_is_true(self):
         self.assertTrue(self.decide("push", self.code, self.project))
+
+    def test_lockfile_renamed_away_is_true(self):
+        # git diff's rename detection would list only Package.resolved.old.
+        self.assertTrue(self.decide("pull_request", self.locked, self.renamed))
+
+    def test_lockfile_deleted_is_true(self):
+        self.assertTrue(self.decide("pull_request", self.locked, self.deleted))
 
     def test_dispatch_is_true(self):
         self.assertTrue(self.decide("workflow_dispatch", "", ""))
@@ -167,13 +184,24 @@ class Check(unittest.TestCase):
         return subprocess.run(["bash", str(CHECK), "App.xcodeproj", "App"], cwd=self.repo, env=env,
                               capture_output=True, text=True)
 
-    def test_no_lockfile_passes_with_a_note_and_never_resolves(self):
+    def test_no_lockfile_with_local_packages_only_passes(self):
         (self.repo / "README.md").write_text("x\n")
         git(self.repo, "add", "."); git(self.repo, "commit", "-q", "-m", "init")
+        self.state([])
         proc = self.run_check()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("No Package.resolved", proc.stdout)
-        self.assertFalse(self.calls.exists(), "xcodebuild was called")
+        self.assertIn("-resolvePackageDependencies", self.calls.read_text())
+
+    def test_lockfile_removed_with_remote_packages_fails_naming_them(self):
+        pin = {"identity": "swift-collections", "kind": "remoteSourceControl", "location": "x",
+               "state": {"revision": "a", "version": "1.1.0"}}
+        self.commit_lock([pin])
+        git(self.repo, "rm", "-q", str(self.resolved)); git(self.repo, "commit", "-q", "-m", "drop the lockfile")
+        self.state(["swift-collections"])
+        proc = self.run_check()
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("'swift-collections' is resolved into the build but is not in Package.resolved", proc.stdout)
 
     def test_complete_lockfile_passes(self):
         pin = {"identity": "swift-collections", "kind": "remoteSourceControl", "location": "x",

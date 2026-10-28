@@ -9,7 +9,9 @@
 #      resolution can pull in a new transitive package without writing it back.
 #   2. Resolving leaves Package.resolved unchanged; a change means a pinned version is outside a
 #      dependency's range, and resolution silently picked another.
-# With no Package.resolved (an app with no remote packages) it passes with a note and resolves nothing.
+# With no Package.resolved it still resolves: an app whose build uses only local packages passes with
+# a note, and one that resolves any remote package fails (check 1), as koinori's original did, so a
+# deleted or renamed-away lockfile is never read as "nothing to pin".
 # The lockfile defaults to <project>/project.xcworkspace/xcshareddata/swiftpm/Package.resolved.
 # Tests: tools/ios/test_lockfile_gate.py.
 
@@ -19,16 +21,15 @@ project="${1:?usage: lockfile-check.sh <project> <scheme> [<Package.resolved>]}"
 scheme="${2:?usage: lockfile-check.sh <project> <scheme> [<Package.resolved>]}"
 lock="${3:-$project/project.xcworkspace/xcshareddata/swiftpm/Package.resolved}"
 
-if [ ! -f "$lock" ]; then
-  echo "No Package.resolved at $lock: the app pins no remote packages, so there is nothing to check."
-  exit 0
-fi
-
 dd="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lockfile-dd"
 log="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lockfile-resolve.log"
 committed="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lockfile-committed.json"
-rm -rf "$dd"
-cp "$lock" "$committed"
+rm -rf "$dd" "$committed"
+if [ -f "$lock" ]; then
+  cp "$lock" "$committed"
+else
+  echo "No Package.resolved at $lock: resolving to check the build uses no remote package."
+fi
 
 xcodebuild -resolvePackageDependencies -project "$project" -scheme "$scheme" -derivedDataPath "$dd" >"$log" 2>&1
 rc=$?
@@ -39,10 +40,12 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 python3 - "$committed" "$lock" "$dd/SourcePackages/workspace-state.json" "$project" "$scheme" <<'PY'
-import json, sys
+import json, os, sys
 committed_path, lock_path, state_path, project, scheme = sys.argv[1:6]
 
 def pins(path):
+    if not os.path.isfile(path):
+        return {}
     return {p["identity"]: p.get("state", {}) for p in json.load(open(path, encoding="utf-8")).get("pins", [])}
 
 committed, resolved = pins(committed_path), pins(lock_path)

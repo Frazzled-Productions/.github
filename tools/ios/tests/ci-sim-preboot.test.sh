@@ -5,7 +5,10 @@
 # nothing touches a real simulator. Checks: the name derived from the repository; a missing device is
 # created on the newest available iOS runtime as the requested model; a device of the wrong model is
 # deleted and recreated; shutdown, erase, boot, bootstatus in that order; the UDID is the last line;
-# the default GUI simulator is refused; a boot that never finishes fails within the bound.
+# the default GUI simulator is refused; a boot that never finishes fails within the bound. The runtime
+# is the newest one that supports the model (roast-conductor run 40748691093 picked iOS 27.1, which
+# does not); none supporting it, or a failed create, fails loudly; a CI device left on an incompatible
+# or unavailable runtime is recreated (ops #345, .github #27).
 #
 #   tools/ios/tests/ci-sim-preboot.test.sh            test tools/ios/ci-sim.sh
 #   CI_SIM_SCRIPT=/path/to/ci-sim.sh <this>           test another copy
@@ -30,14 +33,22 @@ PRO18=com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro
 PRO17=com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro
 NEW_UDID=99999999-0000-4000-8000-000000000009
 
-cat > "$T/runtimes.json" <<JSON
+# runtimes_json <types on RT_OLD> <types on RT_NEW>: the runtime list, each iOS runtime supporting the
+# given space-separated device type identifiers (the unavailable and watchOS ones support both).
+runtimes_json() {
+  local old new t
+  old=""; for t in $1; do old="$old${old:+,}{\"identifier\":\"$t\"}"; done
+  new=""; for t in $2; do new="$new${new:+,}{\"identifier\":\"$t\"}"; done
+  cat > "$T/runtimes.json" <<JSON
 {"runtimes":[
- {"identifier":"$RT_OLD","version":"26.0","platform":"iOS","isAvailable":true},
- {"identifier":"$RT_NEW","version":"27.1","platform":"iOS","isAvailable":true},
- {"identifier":"$RT_GONE","version":"28.0","platform":"iOS","isAvailable":false},
- {"identifier":"com.apple.CoreSimulator.SimRuntime.watchOS-27-0","version":"27.0","platform":"watchOS","isAvailable":true}
+ {"identifier":"$RT_OLD","version":"26.0","platform":"iOS","isAvailable":true,"supportedDeviceTypes":[$old]},
+ {"identifier":"$RT_NEW","version":"27.1","platform":"iOS","isAvailable":true,"supportedDeviceTypes":[$new]},
+ {"identifier":"$RT_GONE","version":"28.0","platform":"iOS","isAvailable":false,"supportedDeviceTypes":[{"identifier":"$PRO17"},{"identifier":"$PRO18"}]},
+ {"identifier":"com.apple.CoreSimulator.SimRuntime.watchOS-27-0","version":"27.0","platform":"watchOS","isAvailable":true,"supportedDeviceTypes":[{"identifier":"$PRO17"},{"identifier":"$PRO18"}]}
 ]}
 JSON
+}
+runtimes_json "$PRO17" "$PRO17 $PRO18"
 cat > "$T/devicetypes.json" <<JSON
 {"devicetypes":[
  {"name":"iPhone 17 Pro","identifier":"$PRO17"},
@@ -52,7 +63,13 @@ case "\$*" in
   "simctl list runtimes --json") cat "$T/runtimes.json" ;;
   "simctl list devicetypes --json") cat "$T/devicetypes.json" ;;
   "simctl list devices --json") cat "$T/devices.json" ;;
-  "simctl create "*) echo "$NEW_UDID" ;;
+  "simctl create "*)
+    if [ -e "$T/create_fail" ]; then
+      echo "Unable to create a device for device type: iPhone 18 Pro (\$4), runtime: iOS 27.1 (\$5)"
+      printf '%s\n' "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=403):" "Incompatible device" >&2
+      exit 148
+    fi
+    echo "$NEW_UDID" ;;
   "simctl bootstatus "*) if [ -e "$T/hang" ]; then echo "\$\$" >> "$T/hung"; exec sleep 30; fi ;;
 esac
 exit 0
@@ -136,6 +153,51 @@ rm -f "$T/hang"
 if [ "$RC" -ne 0 ] && [ "$took" -lt 20 ] && grep -q "RoastConductor-CI-iPhone ($NEW_UDID) did not boot within 3 seconds" "$T/err"; then
   ok "a wedged boot fails in ${took}s with an error naming the simulator"
 else bad "wedged boot: rc $RC after ${took}s, stderr: $(tr '\n' '|' < "$T/err")"; fi
+
+UUID_RE='[0-9A-Fa-f]{8}-([0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}'
+
+# 8. The newest runtime lacks the model (iOS 27.1 and iPhone 18 Pro, run 40748691093): the older
+# runtime that supports it is chosen.
+runtimes_json "$PRO17 $PRO18" ""
+run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/roast-conductor
+if [ "$RC" -eq 0 ] && grep -qx "simctl create RoastConductor-CI-iPhone $PRO18 $RT_OLD" "$T/calls" \
+  && [ "$(last_line)" = "$NEW_UDID" ]; then
+  ok "the newest runtime without the model is skipped for the older one that has it"
+else bad "runtime without the model: rc $RC, calls $(calls_for)"; fi
+
+# 9. No runtime supports the model: an error naming it and the runtimes checked, nothing created.
+runtimes_json "$PRO17" "$PRO17"
+run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/roast-conductor
+if [ "$RC" -eq 1 ] && ! grep -q "^simctl create" "$T/calls" \
+  && grep -q "::error::.*iPhone 18 Pro.*$RT_NEW.*$RT_OLD" "$T/err"; then
+  ok "no runtime supporting the model fails with an error naming the model and the runtimes checked"
+else bad "no supporting runtime: rc $RC, calls $(calls_for), stderr: $(tr '\n' '|' < "$T/err")"; fi
+
+# 10. simctl create fails (the 403 "Incompatible device"): exit 1 with simctl's message, and nothing
+# UUID-like (nor simctl's text) on stdout, so xcodebuild never gets a bad destination.
+runtimes_json "$PRO17" "$PRO17 $PRO18"
+touch "$T/create_fail"
+run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/roast-conductor
+rm -f "$T/create_fail"
+if [ "$RC" -eq 1 ] && ! printf '%s' "$OUT" | grep -qE "$UUID_RE|Unable" \
+  && grep -q "::error::.*code=403.*Incompatible device" "$T/err" \
+  && ! grep -qE "^simctl (erase|boot) " "$T/calls"; then
+  ok "a failed create exits 1 with simctl's message and prints no UDID"
+else bad "failed create: rc $RC, stdout '$OUT', stderr: $(tr '\n' '|' < "$T/err")"; fi
+
+# 11. The CI device left on a runtime that no longer supports the model (and one on an unavailable
+# runtime) is deleted and recreated on the chosen runtime; another app's device and a device with the
+# GUI simulator prefix are never touched.
+runtimes_json "$PRO17 $PRO18" "$PRO17"
+INCOMPAT=12121212-1111-4111-8111-121212121212
+GONE=13131313-1111-4111-8111-131313131313
+OTHER=14141414-1111-4111-8111-141414141414
+run_preboot "{\"devices\":{\"$RT_NEW\":[{\"name\":\"RoastConductor-CI-iPhone\",\"udid\":\"$INCOMPAT\",\"deviceTypeIdentifier\":\"$PRO18\",\"isAvailable\":true},{\"name\":\"LoopYear-CI-iPhone\",\"udid\":\"$OTHER\",\"deviceTypeIdentifier\":\"$PRO18\",\"isAvailable\":true}],\"$RT_GONE\":[{\"name\":\"RoastConductor-CI-iPhone\",\"udid\":\"$GONE\",\"deviceTypeIdentifier\":\"$PRO18\",\"isAvailable\":false},{\"name\":\"RoastConductor-CI-iPhone\",\"udid\":\"$GUI\",\"deviceTypeIdentifier\":\"$PRO18\",\"isAvailable\":false}]}}" \
+  GITHUB_REPOSITORY=Frazzled-Productions/roast-conductor
+want="simctl shutdown $INCOMPAT|simctl delete $INCOMPAT|simctl shutdown $GONE|simctl delete $GONE|simctl create RoastConductor-CI-iPhone $PRO18 $RT_OLD|simctl shutdown $NEW_UDID|simctl erase $NEW_UDID|simctl boot $NEW_UDID|simctl bootstatus $NEW_UDID -b|"
+if [ "$RC" -eq 0 ] && [ "$(calls_for)" = "$want" ] && [ "$(last_line)" = "$NEW_UDID" ]; then
+  ok "the CI device on an incompatible or unavailable runtime is recreated; other devices untouched"
+else bad "stale runtime: rc $RC, calls $(calls_for)"; fi
 
 echo
 if [ "$FAIL" -ne 0 ]; then echo "$PASS passed, $FAIL FAILED"; exit 1; fi

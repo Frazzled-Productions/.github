@@ -74,7 +74,7 @@ run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/roast-conduc
 if [ "$RC" -eq 0 ]; then ok "missing device: exits 0"; else bad "missing device: exit $RC ($(cat "$T/err"))"; fi
 if grep -qx "simctl create RoastConductor-CI-iPhone $PRO18 $RT_NEW" "$T/calls"; then
   ok "roast-conductor gives RoastConductor-CI-iPhone, created as iPhone 18 Pro on the newest available iOS"
-else bad "did not create RoastConductor-CI-iPhone as $PRO18 on $RT_NEW: $(cat "$T/calls" | tr '\n' '|')"; fi
+else bad "did not create RoastConductor-CI-iPhone as $PRO18 on $RT_NEW: $(tr '\n' '|' < "$T/calls")"; fi
 want="simctl create RoastConductor-CI-iPhone $PRO18 $RT_NEW|simctl shutdown $NEW_UDID|simctl erase $NEW_UDID|simctl boot $NEW_UDID|simctl bootstatus $NEW_UDID -b|"
 if [ "$(calls_for)" = "$want" ]; then ok "order is create, shutdown, erase, boot, bootstatus"
 else bad "order: $(calls_for)"; fi
@@ -83,13 +83,13 @@ if [ "$(last_line)" = "$NEW_UDID" ]; then ok "UDID is the last line"; else bad "
 # 2. Other repo names.
 run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/loop-year
 if grep -q "^simctl create LoopYear-CI-iPhone " "$T/calls"; then ok "loop-year gives LoopYear-CI-iPhone"
-else bad "loop-year name: $(cat "$T/calls" | tr '\n' '|')"; fi
+else bad "loop-year name: $(tr '\n' '|' < "$T/calls")"; fi
 run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/koinori
 if grep -q "^simctl create Koinori-CI-iPhone " "$T/calls"; then ok "koinori gives Koinori-CI-iPhone"
-else bad "koinori name: $(cat "$T/calls" | tr '\n' '|')"; fi
+else bad "koinori name: $(tr '\n' '|' < "$T/calls")"; fi
 run_preboot '{"devices":{}}' GITHUB_REPOSITORY=Frazzled-Productions/loop-year CI_SIMULATOR_NAME=Custom-CI
 if grep -q "^simctl create Custom-CI " "$T/calls"; then ok "an explicit ci-simulator-name wins"
-else bad "explicit name: $(cat "$T/calls" | tr '\n' '|')"; fi
+else bad "explicit name: $(tr '\n' '|' < "$T/calls")"; fi
 
 # 3. Existing device of the right model: reused, erased, booted.
 OWN=44444444-1111-4111-8111-444444444444

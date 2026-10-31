@@ -246,7 +246,7 @@ jobs:
           gh pr merge "$pr" --auto --rebase --match-head-commit "$sha" >> "$LOG" 2>&1 || fail "$label" "Could not turn on auto-merge for #$pr."
           # A PR opened with GITHUB_TOKEN starts no workflow, so start its review here. A repo with no
           # ci-review caller yet has nothing to start, and that must not fail the archive.
-          gh workflow run ci-review.yml --ref "$BRANCH" -f pr-number="$pr" >> "$LOG" 2>&1 || echo "No CI review started for #$pr (no caller in this repo)." | tee -a "$LOG"
+          gh workflow run ci-review.yml --ref "$BRANCH" -f pr-number="$pr" >> "$LOG" 2>&1 || echo "No CI review started for #$pr (no caller in this repo, or the dispatch failed: see above)." | tee -a "$LOG"
           echo "Opened #$pr for $label at ${sha::7}; its checks are approved and running; it merges when they pass."
 
           # Close the bot's own open "OpenSpec archive failed: <name>" issues for the changes just archived

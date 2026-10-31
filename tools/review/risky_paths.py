@@ -5,7 +5,7 @@ whole, so the reviewer's plain copy parses too. The same code lives in ops as sc
 the reviewer runs in other repos and cannot read ops, which is private. Change both together.
 
 Usage: risky_paths.py <list file> <repo> [extra globs, one per line] < changed files. Prints the risky files;
-exit 0 when there are any, 1 when none.
+exit 0 when there are any, 3 when none, so a crash (exit 1) is never read as "not risky".
 """
 import re
 import sys
@@ -50,7 +50,7 @@ def main(argv):
         rules = parse(f.read())
     found = risky(argv[2], sys.stdin.read().split("\n"), rules, argv[3] if len(argv) > 3 else "")
     print("\n".join(found))
-    return 0 if found else 1
+    return 0 if found else 3
 
 
 if __name__ == "__main__":

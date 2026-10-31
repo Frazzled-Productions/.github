@@ -29,14 +29,70 @@ check "token error is named for the watcher" '.state == "success" and (.descript
 check "not a verdict counts as skipped" '.labels == ["review-skipped"]' '{"oops":1}'
 check "no change found is reported" '.body | contains("none found")' '{"findings":[],"p1_count":0}'
 
+# apply: real verdict.py against a fake gh on PATH, which logs its writes
+mkdir -p "$tmp/bin"
+cat > "$tmp/bin/gh" <<'FAKE'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_DIR/calls"
+case "$*" in
+  "pr view"*) echo "{\"author\":{\"is_bot\":${FAKE_BOT:-false}},\"headRefOid\":\"newhead\"}" ;;
+  *"/comments?per_page=100"*) cat "$FAKE_DIR/comments.jsonl" ;;
+  *"/status?per_page=100"*) cat "$FAKE_DIR/status.json" ;;
+  *"$FAKE_FAIL"*) [ -n "$FAKE_FAIL" ] && exit 1 ;;
+esac
+exit 0
+FAKE
+chmod +x "$tmp/bin/gh"
+applied() { # applied <label> <grep pattern in calls, ! to negate> ; review in $tmp/out.json
+  local label=$1; shift
+  local ok=1
+  for pat in "$@"; do
+    if [[ $pat == !* ]]; then grep -q -- "${pat#!}" "$tmp/calls" && ok=0
+    else grep -q -- "$pat" "$tmp/calls" || ok=0; fi
+  done
+  if [ "$ok" = 1 ]; then pass=$((pass + 1)); echo "ok   $label"; else fail=$((fail + 1)); echo "FAIL $label"; cat "$tmp/calls"; fi
+}
+run_apply() { # run_apply <verdict JSON or ""> <comments jsonl> <head status JSON> [flags]
+  printf '%s' "$1" > "$tmp/out.json"; printf '%s' "$2" > "$tmp/comments.jsonl"; printf '%s' "$3" > "$tmp/status.json"; shift 3
+  : > "$tmp/calls"
+  PATH="$tmp/bin:$PATH" FAKE_DIR="$tmp" GITHUB_REPOSITORY=o/r python3 tools/review/verdict.py apply --output "$tmp/out.json" --pr 7 --head reviewed "$@" 2>/dev/null
+}
+bot='"user":{"login":"github-actions[bot]"}'
+sticky2="{\"id\":5,$bot,\"body\":\"<!-- ci-review rounds=2 -->\\nold\"}"
+none='{"statuses":[]}'
+run_apply "$p1" "$sticky2" "$none"
+applied "third P1 from the sticky count labels and patches" 'labels\[\]=needs-fraser' 'PATCH repos/o/r/issues/comments/5' 'statuses/reviewed' 'state=failure' '!newhead'
+spoof='{"id":6,"user":{"login":"someone"},"body":"<!-- ci-review rounds=2 -->"}'
+run_apply "$p1" "$spoof" "$none"
+applied "a marker from anyone else is ignored" '!needs-fraser' '!PATCH' 'rounds=1'
+reply="{\"id\":8,\"user\":{\"login\":\"a\"},\"body\":\"Review reply: it is a false alarm\"}"
+run_apply "$p1" "$sticky2
+$reply" "$none"
+applied "escalation carries the agent's reply" 'it is a false alarm'
+run_apply "" "" '{"statuses":[{"context":"CI review","state":"failure"}]}'
+applied "a skipped re-review never clears a failure" 'state=failure' 'review-skipped'
+: > "$tmp/calls"; printf '%s' "$p1" > "$tmp/out.json"; printf '' > "$tmp/comments.jsonl"; printf '%s' "$none" > "$tmp/status.json"
+PATH="$tmp/bin:$PATH" FAKE_DIR="$tmp" FAKE_FAIL=/comments GITHUB_REPOSITORY=o/r python3 tools/review/verdict.py apply --output "$tmp/out.json" --pr 7 --head reviewed 2>/dev/null
+applied "a failed comment write still posts the status" 'state=failure'
+
+tok() { # tok <label> <want 0|1> <text>
+  printf '%s' "$3" > "$tmp/exec.json"
+  local got; got=$(python3 tools/review/verdict.py token-error --output "$tmp/exec.json")
+  if [ "$got" = "$2" ]; then pass=$((pass + 1)); echo "ok   $1"; else fail=$((fail + 1)); echo "FAIL $1 (got $got)"; fi
+}
+tok "an auth error is a token error" 1 '{"type":"result","is_error":true,"result":"API Error: 401 authentication_error"}'
+tok "a stray 401 is not" 0 '{"result":"line 1401 of 2401, tokens 40100"}'
+
 risky() { # risky <label> <want exit> <repo> <file> [extra]
   printf '%s\n' "$4" | python3 tools/review/risky_paths.py tools/review/risky-paths.txt "$3" "${5:-}" > /dev/null
   local got=$?
   if [ "$got" = "$2" ]; then pass=$((pass + 1)); echo "ok   $1"; else fail=$((fail + 1)); echo "FAIL $1 (exit $got)"; fi
 }
+printf 'x\n' | python3 tools/review/risky_paths.py "$tmp/no-such-file" r > /dev/null 2>&1
+got=$?; if [ "$got" != 0 ] && [ "$got" != 3 ]; then pass=$((pass + 1)); echo "ok   a helper crash is neither answer"; else fail=$((fail + 1)); echo "FAIL helper crash gave $got"; fi
 risky "a repo path through risky-paths-extra" 0 loop-year LoopYear/Unlock/Gate.swift 'LoopYear/Unlock/**'
 risky "a workflow anywhere" 0 website .github/workflows/ci.yml
-risky "docs are not risky" 1 ops docs/readme.md
+risky "docs are not risky" 3 ops docs/readme.md
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

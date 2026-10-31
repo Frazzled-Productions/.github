@@ -29,6 +29,7 @@ ESCALATE = "needs-fraser"
 ROUNDS = 3
 BOT = "github-actions[bot]"
 REPLY = "Review reply:"
+MEMBERS = ("OWNER", "MEMBER", "COLLABORATOR")
 # A real authentication failure, never a bare 401: the file also holds the diff and token counts.
 TOKEN_ERROR = re.compile(r"authentication_error|invalid bearer token|oauth token has expired|invalid api key"
                          r"|api error: 401", re.I)
@@ -40,12 +41,15 @@ def _findings(review):
     return "\n".join(rows) or "No findings."
 
 
-def decide(review, rounds, bot, risky, token_error, failed=False, reply=""):
-    """review: the structured output, or None when no review ran. failed: the commit already has a failing
-    result. reply: the agent's newest "Review reply:". Returns state, description, labels, body, rounds."""
+def decide(review, rounds, bot, risky, token_error, failed=False, reply="", previous=""):
+    """review: the structured output, or None when no review ran. failed: the commit already has a P1. reply:
+    the agent's newest "Review reply:". previous: the sticky comment's text, kept so the finding stays readable.
+    Returns state, description, labels, body, rounds."""
     if review is None and failed:
-        return dict(state="failure", description="P1 stands, re-review skipped", labels=[SKIPPED], rounds=rounds,
-                    body="CI review could not run again, so the earlier P1 stands on this commit.")
+        note = "CI review could not run again, so the earlier P1 stands on this commit."
+        return dict(state="failure", rounds=rounds, labels=[SKIPPED],
+                    description="P1 stands, re-review skipped" + (": token missing or expired" if token_error else ""),
+                    body=previous if note in previous else f"{previous}\n\n{note}".strip())
     if review is None:
         why = "token missing or expired" if token_error else "the review could not run"
         state = "failure" if risky else "success"
@@ -86,21 +90,37 @@ def gh(*args):
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
 
+def post_status(repo, head, state, description):
+    gh("api", "-X", "POST", f"repos/{repo}/statuses/{head}", "-f", f"state={state}", "-f", f"context={CONTEXT}",
+       "-f", f"description={description}")
+
+
+def read_pr(repo, pr, head):
+    info = json.loads(gh("pr", "view", pr, "-R", repo, "--json", "author,headRefOid"))
+    lines = gh("api", "--paginate", "--jq", ".[]", f"repos/{repo}/issues/{pr}/comments?per_page=100").splitlines()
+    statuses = json.loads(gh("api", f"repos/{repo}/commits/{head or info['headRefOid']}/status?per_page=100"))["statuses"]
+    return info, [json.loads(line) for line in lines if line.strip()], statuses
+
+
 def apply(args):
     repo, pr = os.environ["GITHUB_REPOSITORY"], args.pr
-    info = json.loads(gh("pr", "view", pr, "-R", repo, "--json", "author,headRefOid"))
+    try:
+        info, comments, statuses = read_pr(repo, pr, args.head)
+    except subprocess.CalledProcessError:
+        # With no status the watcher would settle this PR as skipped, which could pass a P1.
+        if args.head:
+            post_status(repo, args.head, "failure", "verdict not recorded, re-run")
+        raise
     head = args.head or info["headRefOid"]  # the commit reviewed, not whatever is newest now
-    lines = gh("api", "--paginate", "--jq", ".[]", f"repos/{repo}/issues/{pr}/comments?per_page=100").splitlines()
-    comments = [json.loads(line) for line in lines if line.strip()]
     mine = next((c for c in comments if c["user"]["login"] == BOT and MARKER_RE.search(c["body"])), None)
     rounds = int(MARKER_RE.search(mine["body"]).group(1)) if mine else 0
-    replies = [c["body"] for c in comments if c["body"].startswith(REPLY)]
-    statuses = json.loads(gh("api", f"repos/{repo}/commits/{head}/status?per_page=100"))["statuses"]
-    failed = any(s["context"] == CONTEXT and s["state"] == "failure" for s in statuses)
+    previous = MARKER_RE.sub("", mine["body"]).strip() if mine else ""
+    replies = [c["body"] for c in comments if c["body"].startswith(REPLY) and c.get("author_association") in MEMBERS]
+    failed = any(s["context"] == CONTEXT and s["state"] == "failure" and "P1" in (s.get("description") or "")
+                 for s in statuses)
     out = decide(load(args.output), rounds, bool(info["author"].get("is_bot")), args.risky == 1, args.token_error == 1,
-                 failed, replies[-1] if replies else "")
-    gh("api", "-X", "POST", f"repos/{repo}/statuses/{head}", "-f", f"state={out['state']}",
-       "-f", f"context={CONTEXT}", "-f", f"description={out['description']}")
+                 failed, replies[-1] if replies else "", previous)
+    post_status(repo, head, out["state"], out["description"])
     print(out["description"])
     body = f"{MARKER.format(out['rounds'])}\n{out['body']}"
     if mine:

@@ -36,7 +36,7 @@ cat > "$tmp/bin/gh" <<'FAKE'
 echo "$*" >> "$FAKE_DIR/calls"
 case "$*" in
   "pr view"*) echo "{\"author\":{\"is_bot\":${FAKE_BOT:-false}},\"headRefOid\":\"newhead\"}" ;;
-  *"/comments?per_page=100"*) cat "$FAKE_DIR/comments.jsonl" ;;
+  *"/comments?per_page=100"*) [ -n "${FAKE_READ_FAIL:-}" ] && exit 1; cat "$FAKE_DIR/comments.jsonl" ;;
   *"/status?per_page=100"*) cat "$FAKE_DIR/status.json" ;;
   *"$FAKE_FAIL"*) [ -n "$FAKE_FAIL" ] && exit 1 ;;
 esac
@@ -65,12 +65,25 @@ applied "third P1 from the sticky count labels and patches" 'labels\[\]=needs-fr
 spoof='{"id":6,"user":{"login":"someone"},"body":"<!-- ci-review rounds=2 -->"}'
 run_apply "$p1" "$spoof" "$none"
 applied "a marker from anyone else is ignored" '!needs-fraser' '!PATCH' 'rounds=1'
-reply="{\"id\":8,\"user\":{\"login\":\"a\"},\"body\":\"Review reply: it is a false alarm\"}"
+reply="{\"id\":8,\"author_association\":\"MEMBER\",\"user\":{\"login\":\"a\"},\"body\":\"Review reply: it is a false alarm\"}"
 run_apply "$p1" "$sticky2
 $reply" "$none"
 applied "escalation carries the agent's reply" 'it is a false alarm'
-run_apply "" "" '{"statuses":[{"context":"CI review","state":"failure"}]}'
-applied "a skipped re-review never clears a failure" 'state=failure' 'review-skipped'
+outsider='{"id":9,"author_association":"NONE","user":{"login":"x"},"body":"Review reply: outsider text"}'
+run_apply "$p1" "$sticky2
+$outsider" "$none"
+applied "a reply from outside the repo is not quoted" '!outsider text'
+p1status='{"statuses":[{"context":"CI review","state":"failure","description":"1 P1 finding"}]}'
+stickyp1="{\"id\":5,$bot,\"body\":\"<!-- ci-review rounds=1 -->\\nCI review failed. the finding text\"}"
+run_apply "" "$stickyp1" "$p1status"
+applied "a skipped re-review never clears a P1 and keeps the finding" 'state=failure' 'review-skipped' 'the finding text' 'description=P1 stands'
+run_apply "" "$stickyp1" "$p1status" --token-error 1
+applied "a skipped re-review still names a token error" 'state=failure' 'token missing or expired'
+run_apply "" "" '{"statuses":[{"context":"CI review","state":"failure","description":"review skipped, risky path"}]}' --risky 1
+applied "a risky skip is not called a P1" 'state=failure' '!P1 stands'
+: > "$tmp/calls"; printf '%s' "$p1" > "$tmp/out.json"; printf '%s' "$none" > "$tmp/status.json"
+PATH="$tmp/bin:$PATH" FAKE_DIR="$tmp" FAKE_READ_FAIL=1 GITHUB_REPOSITORY=o/r python3 tools/review/verdict.py apply --output "$tmp/out.json" --pr 7 --head reviewed 2>/dev/null
+applied "a failed read still posts a failure" 'statuses/reviewed' 'state=failure'
 : > "$tmp/calls"; printf '%s' "$p1" > "$tmp/out.json"; printf '' > "$tmp/comments.jsonl"; printf '%s' "$none" > "$tmp/status.json"
 PATH="$tmp/bin:$PATH" FAKE_DIR="$tmp" FAKE_FAIL=/comments GITHUB_REPOSITORY=o/r python3 tools/review/verdict.py apply --output "$tmp/out.json" --pr 7 --head reviewed 2>/dev/null
 applied "a failed comment write still posts the status" 'state=failure'

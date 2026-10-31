@@ -29,6 +29,7 @@ name: OpenSpec archive (reusable)
 #   4. Turn on auto-merge (rebase, so each change keeps its own commit) pinned to that head commit:
 #      GitHub merges only once the required checks pass. This job does not wait for them, so it never
 #      holds the runner the checks need.
+#      Then start the PR's CI review (ci-review.yml), which would not otherwise run on a bot PR.
 #   5. Close the bot's own open "OpenSpec archive failed: <name>" issues for the changes this run
 #      archived, with a comment linking the run and the PR (tools/openspec/close_resolved.py). Issues
 #      for other changes, people's issues and the bot's "all changes", "unexpected change folder" and
@@ -243,6 +244,9 @@ jobs:
           python3 "$TOOLS/tools/openspec/approve_runs.py" "$GITHUB_REPOSITORY" "$pr" "$sha" --branch "$BRANCH" --base "$BASE" 2>&1 | tee -a "$LOG"
           [ "${PIPESTATUS[0]}" = 0 ] || fail "$label" "Could not approve the archive PR #$pr's own held checks (output below)."
           gh pr merge "$pr" --auto --rebase --match-head-commit "$sha" >> "$LOG" 2>&1 || fail "$label" "Could not turn on auto-merge for #$pr."
+          # A PR opened with GITHUB_TOKEN starts no workflow, so start its review here. A repo with no
+          # ci-review caller yet has nothing to start, and that must not fail the archive.
+          gh workflow run ci-review.yml --ref "$BRANCH" -f pr-number="$pr" >> "$LOG" 2>&1 || echo "No CI review started for #$pr (no caller in this repo)." | tee -a "$LOG"
           echo "Opened #$pr for $label at ${sha::7}; its checks are approved and running; it merges when they pass."
 
           # Close the bot's own open "OpenSpec archive failed: <name>" issues for the changes just archived

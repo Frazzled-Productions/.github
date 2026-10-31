@@ -13,7 +13,7 @@ WORKFLOWS = pathlib.Path(__file__).resolve().parents[2] / ".github/workflows"
 
 class Shape(unittest.TestCase):
     def test_required_check_jobs_have_no_if(self):
-        for name in ("openspec-required.yml", "context-budget.yml"):
+        for name in ("openspec-required.yml", "context-budget.yml", "ci-review.yml"):
             text = (WORKFLOWS / name).read_text(encoding="utf-8")
             jobs = text.split("\njobs:\n", 1)[1]
             self.assertIsNone(re.search(r"^    if:", jobs, re.M), name)

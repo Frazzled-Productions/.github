@@ -1,0 +1,8 @@
+* .github/workflows/**
+* .github/dependabot.yml
+* supabase/migrations/**
+* **/PrivacyInfo.xcprivacy
+* **/*.entitlements
+* **/*.storekit
+* fastlane/**
+* .env*

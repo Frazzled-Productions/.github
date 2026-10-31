@@ -45,6 +45,17 @@ jobs:
       test: npm test
       build: npm run build
 ```
+- **`ci-review.yml`** - one independent Claude review per PR head commit, in a fresh session on the
+  Max plan (a `claude setup-token` token, never an API key). Its result is the commit status
+  **`CI review`**, the required check; the job itself is `CI review run`. A P1 fails it, review 3 with a
+  P1 (or a bot PR's first) adds `needs-fraser`, and a review that cannot run after one retry is labelled
+  `review-skipped` and fails only on risky paths (`tools/review/risky-paths.txt` plus the caller's
+  `risky-paths-extra`). The list's source is ops `standards/review-tiers.md`. Inputs `pr-number`,
+  `runs-on` (`["self-hosted","hexos"]` on private repos, unset on public ones, never the Mac runners),
+  `risky-paths-extra`; secret `claude-code-oauth-token`. The prompt is `tools/review/review-prompt.md`,
+  so one edit updates every repo. The archive workflow starts the review on its own PRs; the ops stall
+  watcher settles reviews queued over 30 minutes and opens the token issue. Consumer snippet: the
+  file's header.
 - **`em-dash-check.yml`** - the house-style job: fails when a PR or push adds a line containing an
   em dash, or when the PR body or a commit message the PR or push adds carries an AI-attribution
   trailer (koinori's pattern, any case; `tools/ci/trailer.py`). Diff-only, so old text never blocks new

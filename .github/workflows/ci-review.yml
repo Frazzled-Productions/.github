@@ -19,7 +19,10 @@ name: CI review (reusable)
 # the caller's tree (as the OpenSpec workflows fetch their tools), so a PR cannot edit its own judge.
 # Only the caller's risky-paths-extra is the PR's own, on a pull_request run.
 #
-# Consumer (thin caller in each repo's .github/workflows/ci-review.yml). Private repos pass
+# Consumer (thin caller in each repo's .github/workflows/ci-review.yml, on the default branch and the
+# work base: issue_comment and workflow_dispatch read the default branch; this repo's own caller is
+# ci-review-self.yml, as this path is taken). A repo counts as adopted once listed in ops
+# scripts/watcher/ci-review-adopted.txt. Private repos pass
 # runs-on: '["self-hosted","hexos"]'; public repos leave it unset for ubuntu-latest. Repo-specific
 # risky paths (ops standards/review-tiers.md) go in risky-paths-extra, one per line.
 #
@@ -52,6 +55,9 @@ name: CI review (reusable)
 #       uses: Frazzled-Productions/.github/.github/workflows/ci-review.yml@v1
 #       with:
 #         pr-number: ${{ inputs.pr-number || github.event.pull_request.number || github.event.issue.number }}
+#         runs-on: '["self-hosted","hexos"]' # private repos only; leave out on public ones
+#         risky-paths-extra: |- # this repo's lines from ops standards/review-tiers.md, if any
+#           LoopYear/Unlock/**
 #       secrets:
 #         claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 

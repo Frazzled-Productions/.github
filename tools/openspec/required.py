@@ -10,7 +10,8 @@ Judged in this order; the first that applies decides:
   1. Docs-only passes: every file in base...head passes `changed_files.py docs`, with the repo's
      context budget file also counting as docs.
   2. A Dependabot update passes: the author is dependabot[bot] and every changed file is a dependency
-     manifest or lock file, or a workflow under .github/workflows/.
+     manifest or lock file, an Xcode project.pbxproj, a root project.yml (XcodeGen), or a workflow
+     under .github/workflows/. A Swift bump moves the package's minimum version in those two.
   3. No openspec/ folder at the head fails: adopt OpenSpec first.
   4. A change passes: the PR adds or edits a file in openspec/changes/<name>/ (not archive/), and that
      change at the head has specs/<capability>/spec.md or `skip_specs: true` in .openspec.yaml.
@@ -76,7 +77,8 @@ def is_docs_only(entries, budget_file):
 
 def is_dependency_file(path):
     name = path.rsplit("/", 1)[-1]
-    return name in MANIFESTS or bool(REQUIREMENTS_RE.search(name)) or path.startswith(".github/workflows/")
+    return (name in MANIFESTS or bool(REQUIREMENTS_RE.search(name)) or path.startswith(".github/workflows/")
+            or path == "project.yml" or path.endswith(".xcodeproj/project.pbxproj"))
 
 
 def tree(head, prefix):
@@ -104,7 +106,7 @@ def judge(entries, head, budget_file, author):
     if ok:
         return True, "This PR is docs-only (openspec/, docs Markdown and the context budget file), so it needs no OpenSpec change.", "docs-only"
     if all(is_dependency_file(e[3]) for e in entries) and author() == DEPENDABOT:
-        return True, "Passed as a Dependabot update: only dependency manifests, lock files and workflow files changed.", "dependabot"
+        return True, "Passed as a Dependabot update: only dependency manifests, lock files, Xcode project files and workflow files changed.", "dependabot"
     if not tree(head, "openspec/"):
         return False, ADOPT_FIRST, "adopt-first"
     states = {}

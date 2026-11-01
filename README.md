@@ -138,7 +138,7 @@ in each file's header.
   docs must carry an OpenSpec change (`tools/openspec/required.py`). Docs-only PRs pass (the
   `changed_files.py` docs rule, plus the context budget file), and so do the archive bot's PRs, with no
   exemption by author or branch. Dependabot PRs pass when they only change dependency manifests, lock
-  files or workflow files. Otherwise the PR must add or edit an active change in
+  files, Xcode project files (`*.xcodeproj/project.pbxproj`, a root `project.yml`) or workflow files. Otherwise the PR must add or edit an active change in
   `openspec/changes/<name>/` whose head has a delta or `skip_specs: true`; with no `openspec/` at all it
   fails with "adopt OpenSpec first" and the kit's path (`ops/standards/openspec-adoption/README.md`).
   The one exception: the `no-spec` label added by `fraserbrookhouse` (from the PR's issue events; fixed

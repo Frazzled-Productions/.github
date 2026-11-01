@@ -285,6 +285,27 @@ class Required(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("Dependabot", out)
 
+    def test_dependabot_swift_bump_with_xcode_project_files_passes(self):
+        code, out = self.pr({"Koinori/Koinori.xcodeproj/project.pbxproj": "x\n", "project.yml": "x\n",
+                             "Koinori/Koinori.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved": "{}\n"},
+                            base={"README.md": "# r\n"}, author="dependabot[bot]")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Dependabot", out)
+
+    def test_dependabot_xcode_project_files_with_swift_source_fails(self):
+        code, out = self.pr({"App.xcodeproj/project.pbxproj": "x\n", "project.yml": "x\n", "App/App.swift": "x\n"},
+                            author="dependabot[bot]")
+        self.assertEqual(code, 1, out)
+
+    def test_dependabot_only_the_root_project_yml_and_real_pbxproj_count(self):
+        for path in ("sub/project.yml", "project.pbxproj", "notes/project.pbxproj"):
+            code, out = self.pr({path: "x\n"}, author="dependabot[bot]")
+            self.assertEqual(code, 1, path + out)
+
+    def test_a_persons_xcode_project_change_fails(self):
+        code, out = self.pr({"App.xcodeproj/project.pbxproj": "x\n"})
+        self.assertEqual(code, 1, out)
+
     def test_dependabot_touching_source_fails(self):
         code, out = self.pr({"package-lock.json": "{}\n", "src/index.ts": "x\n"}, author="dependabot[bot]")
         self.assertEqual(code, 1, out)

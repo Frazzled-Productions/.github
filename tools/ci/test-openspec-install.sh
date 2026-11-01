@@ -61,7 +61,7 @@ if [ "$RC" -eq 0 ] && [ "$("$DEST/bin/openspec")" = "fake openspec linux-x64" ];
 else bad "Linux X64: rc $RC: $OUT"; fi
 if [ "$(cat "$GPATH")" = "$DEST/bin" ]; then ok "the install folder goes on the job's PATH"
 else bad "GITHUB_PATH holds: $(cat "$GPATH")"; fi
-if [ "$(ls -A "$DEST/bin" | tr '\n' ' ')" = "openspec openspec-binary " ]; then ok "only the wrapper and binary are left behind"
+if [ "$(find "$DEST/bin" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')" = "openspec openspec-binary " ]; then ok "only the wrapper and binary are left behind"
 else bad "left behind: $(ls -A "$DEST/bin")"; fi
 mkdir -p "$T/pr"; printf 'preload = ["./p.js"]\n' > "$T/pr/bunfig.toml"
 rm -f "$T/ran-unverified"
@@ -82,12 +82,12 @@ run "$T/good.sh" Linux ARM64 "file://$T/releases"
 if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "Linux ARM64" && [ ! -e "$DEST/bin/openspec" ]; then
   ok "Linux ARM64 fails naming the platform"
 else bad "Linux ARM64: rc $RC: $OUT"; fi
-for row in "macOS X64" " "; do
-  set -- $row
-  run "$T/good.sh" "${1:-}" "${2:-}" "file://$T/releases"
+for row in "macOS:X64" ":"; do
+  os="${row%:*}"; arch="${row#*:}"
+  run "$T/good.sh" "$os" "$arch" "file://$T/releases"
   if [ "$RC" -ne 0 ] && printf '%s' "$OUT" | grep -q "No pinned openspec" && [ ! -e "$DEST/bin/openspec" ]; then
-    ok "platform '${1:-unset}' fails with no install"
-  else bad "platform '${1:-unset}': rc $RC: $OUT"; fi
+    ok "platform '${os:-unset}' fails with no install"
+  else bad "platform '${os:-unset}': rc $RC: $OUT"; fi
 done
 rm -f "$T/tar-ran" "$T/ran-unverified"
 run "$T/wrong.sh" Linux X64 "file://$T/releases"

@@ -20,6 +20,7 @@ name: Self-test
 #     The structure of ios-ci.yml and ios-testflight.yml (Xcode runner, reaps, the lock around every
 #     Xcode step, timeouts, a light Lockfile gate) is checked by tools/ios/test_workflow_structure.py,
 #     which the OpenSpec tools job runs with the other tools/ios unit tests;
+#   - CI review (ops ci-review): the verdict step and risky-paths helper against sample output, no Claude;
 #   - Light routing: em-dash-check with no runs-on, a raw label and a JSON string all start on hosted
 #     Ubuntu (this repo is public, so the organisation's LIGHT_RUNNER is not visible to it).
 
@@ -89,11 +90,13 @@ jobs:
         with:
           persist-credentials: false
       - name: shellcheck
-        run: shellcheck tools/ios/*.sh tools/ios/tests/*.sh tools/ci/*.sh
+        run: shellcheck tools/ios/*.sh tools/ios/tests/*.sh tools/ci/*.sh tools/tests/*.sh
       - name: tools/ios tests
         run: |
           set -euo pipefail
           for t in tools/ios/tests/*.test.sh; do bash "$t"; done
+      - name: CI review verdict and risky paths
+        run: bash tools/tests/ci-review-verdict.sh
       - name: Install the pinned gitleaks through the shared installer
         run: |
           set -euo pipefail

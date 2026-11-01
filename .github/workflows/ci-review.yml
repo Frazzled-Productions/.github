@@ -1,0 +1,212 @@
+name: CI review (reusable)
+
+# One independent Claude review per PR head commit (OpenSpec change ci-review in ops, spec pr-review).
+# It can only escalate: it never approves, merges or pushes.
+#
+# The result is the commit status "CI review" on the head commit, which is the required check; this
+# job ("CI review run") only carries it, so a queued job never conflicts with the status the stall
+# watcher posts when the runner is offline, and a workflow_dispatch run still reports on the PR.
+# A status belongs to its commit, so a new commit makes an earlier result stale.
+#
+#   - P1 fails the status; review 3 with a P1 adds needs-fraser; a bot PR's first P1 adds it at once.
+#   - No review after one retry 2 minutes later: review-skipped label, status passes with "review
+#     skipped", or fails when the diff touches a risky path. A token error is named in the status
+#     description; the stall watcher opens the one ops issue, because GITHUB_TOKEN cannot write to ops.
+#   - A fork PR gets no secrets and a read-only token, so this job cannot report; the watcher does.
+#   - A review that cannot run never clears a failure already on the commit.
+#
+# Prompt, list and verdict come from this repository at the commit this workflow runs from, never from
+# the caller's tree (as the OpenSpec workflows fetch their tools), so a PR cannot edit its own judge.
+# Only the caller's risky-paths-extra is the PR's own, on a pull_request run.
+#
+# Consumer (thin caller in each repo's .github/workflows/ci-review.yml, on the default branch and the
+# work base: issue_comment and workflow_dispatch read the default branch; this repo's own caller is
+# ci-review-self.yml, as this path is taken). A repo counts as adopted once listed in ops
+# scripts/watcher/ci-review-adopted.txt. Private repos pass
+# runs-on: '["self-hosted","hexos"]'; public repos leave it unset for ubuntu-latest. Repo-specific
+# risky paths (ops standards/review-tiers.md) go in risky-paths-extra, one per line.
+#
+#   name: CI review
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review]
+#     issue_comment:
+#       types: [created]
+#     workflow_dispatch:
+#       inputs:
+#         pr-number:
+#           description: The PR to review (a bot PR, whose opening starts no workflow)
+#           required: true
+#   permissions:
+#     contents: read
+#   jobs:
+#     ci-review:
+#       name: CI review run
+#       # A comment only re-runs the review as a "Review reply:" on a PR, from a repo member.
+#       if: >-
+#         github.event_name != 'issue_comment' || (github.event.issue.pull_request &&
+#         startsWith(github.event.comment.body, 'Review reply:') &&
+#         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+#       permissions:
+#         contents: read
+#         issues: write
+#         pull-requests: write
+#         statuses: write
+#       uses: Frazzled-Productions/.github/.github/workflows/ci-review.yml@v1
+#       with:
+#         pr-number: ${{ inputs.pr-number || github.event.pull_request.number || github.event.issue.number }}
+#         runs-on: '["self-hosted","hexos"]' # private repos only; leave out on public ones
+#         risky-paths-extra: |- # this repo's lines from ops standards/review-tiers.md, if any
+#           LoopYear/Unlock/**
+#       secrets:
+#         claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        description: The PR to review.
+        type: string
+        required: true
+      runs-on:
+        description: Runner labels as a JSON array, or a JSON string. Never the Mac runners. Empty means ubuntu-latest.
+        type: string
+        default: ''
+      risky-paths-extra:
+        description: This repo's own risky paths from ops standards/review-tiers.md, one glob per line.
+        type: string
+        default: ''
+    secrets:
+      claude-code-oauth-token:
+        description: A claude setup-token token (Max plan), the org Actions or Dependabot secret. Missing means a skipped review.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: CI review run
+    runs-on: ${{ fromJSON(inputs.runs-on || '"ubuntu-latest"') }}
+    timeout-minutes: 50 # two reviews of 20 minutes, the retry's wait, and the steps around them
+    concurrency:
+      group: ci-review-${{ github.repository }}-${{ inputs.pr-number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ inputs.pr-number }}
+    steps:
+      - name: Fetch the prompt and verdict tools at this workflow's commit
+        env:
+          # Read through toJSON(job) because actionlint 1.7.12 does not know these two properties yet.
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: |
+          set -euo pipefail
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "::error::pr-number is '$PR', not a number."; exit 1; }
+          TOOLS_REPO=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_repository") or "")')
+          TOOLS_SHA=$(python3 -c 'import json, os; print(json.loads(os.environ["JOB_CONTEXT"]).get("workflow_sha") or "")')
+          [[ "$TOOLS_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::job.workflow_repository is '$TOOLS_REPO', not owner/repo."; exit 1; }
+          [[ "$TOOLS_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is '$TOOLS_SHA', not a SHA."; exit 1; }
+          tools="$RUNNER_TEMP/frazzled-review-tools"
+          rm -rf "$tools" && git init -q "$tools"
+          git -C "$tools" fetch -q --depth 1 "$GITHUB_SERVER_URL/$TOOLS_REPO" "$TOOLS_SHA"
+          git -C "$tools" checkout -q --detach FETCH_HEAD
+          # job.workflow_sha may be an annotated tag object; it must name exactly what is checked out.
+          want=$(git -C "$tools" rev-parse --verify --quiet "$TOOLS_SHA^{commit}") || { echo "::error::$TOOLS_SHA does not name a commit."; exit 1; }
+          [ "$(git -C "$tools" rev-parse HEAD)" = "$want" ] || { echo "::error::Fetched the wrong tools commit."; exit 1; }
+          echo "TOOLS=$tools/tools/review" >> "$GITHUB_ENV"
+
+      - name: Find the head commit
+        id: pr
+        run: echo "head=$(gh pr view "$PR" -R "$GITHUB_REPOSITORY" --json headRefOid -q .headRefOid)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+          persist-credentials: false
+
+      - name: Build the prompt and match risky paths
+        id: prep
+        env:
+          EXTRA: ${{ inputs.risky-paths-extra }}
+        run: |
+          set -euo pipefail
+          repo=${GITHUB_REPOSITORY#*/}
+          gh pr diff "$PR" -R "$GITHUB_REPOSITORY" --name-only > "$RUNNER_TEMP/files.txt"
+          risky=0
+          rc=0
+          python3 "$TOOLS/risky_paths.py" "$TOOLS/risky-paths.txt" "$repo" "$EXTRA" < "$RUNNER_TEMP/files.txt" > "$RUNNER_TEMP/risky.txt" || rc=$?
+          case $rc in
+            0) risky=1 ;;
+            3) ;;
+            *) echo "::error::risky_paths.py failed ($rc)."; exit 1 ;; # the verdict step then treats the diff as risky
+          esac
+          echo "risky=$risky" >> "$GITHUB_OUTPUT"
+          {
+            echo 'prompt<<PROMPT_END'
+            cat "$TOOLS/review-prompt.md"
+            echo
+            echo "PR: $PR in $GITHUB_REPOSITORY. Risky files:"
+            cat "$RUNNER_TEMP/risky.txt"
+            echo 'PROMPT_END'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Review
+        id: first
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        with:
+          claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
+          github_token: ${{ github.token }}
+          allowed_bots: '*'
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: >-
+            --max-turns 30
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*)"
+            --disallowedTools "Read(//proc/**),Read(//sys/**)"
+            --json-schema '{"type":"object","required":["findings","change_compared","p1_count"],"properties":{"findings":{"type":"array","items":{"type":"object","required":["severity","file","line","summary"],"properties":{"severity":{"enum":["P1","P2","P3"]},"file":{"type":"string"},"line":{"type":"integer"},"summary":{"type":"string"},"against":{"type":"string"}}}},"change_compared":{"type":"string"},"p1_count":{"type":"integer"}}}'
+
+      - name: Wait before the retry
+        if: steps.first.outputs.structured_output == ''
+        run: sleep 120
+
+      - name: Review again
+        id: second
+        if: steps.first.outputs.structured_output == ''
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        with:
+          claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
+          github_token: ${{ github.token }}
+          allowed_bots: '*'
+          prompt: ${{ steps.prep.outputs.prompt }}
+          claude_args: >-
+            --max-turns 30
+            --allowedTools "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*)"
+            --disallowedTools "Read(//proc/**),Read(//sys/**)"
+            --json-schema '{"type":"object","required":["findings","change_compared","p1_count"],"properties":{"findings":{"type":"array","items":{"type":"object","required":["severity","file","line","summary"],"properties":{"severity":{"enum":["P1","P2","P3"]},"file":{"type":"string"},"line":{"type":"integer"},"summary":{"type":"string"},"against":{"type":"string"}}}},"change_compared":{"type":"string"},"p1_count":{"type":"integer"}}}'
+
+      - name: Post the verdict
+        if: ${{ !cancelled() }}
+        env:
+          OUTPUT: ${{ steps.first.outputs.structured_output || steps.second.outputs.structured_output }}
+          EXECUTION_FILE: ${{ steps.second.outputs.execution_file || steps.first.outputs.execution_file }}
+          HAS_TOKEN: ${{ secrets.claude-code-oauth-token != '' }}
+          RISKY: ${{ steps.prep.outputs.risky }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$OUTPUT" > "$RUNNER_TEMP/output.json"
+          token_error=0
+          if [ "$HAS_TOKEN" != true ]; then token_error=1
+          elif [ -z "$OUTPUT" ] && [ -n "$EXECUTION_FILE" ]; then token_error=$(python3 "$TOOLS/verdict.py" token-error --output "$EXECUTION_FILE")
+          fi
+          # Risky stays set if the prep step died: an unknown diff must not pass.
+          python3 "$TOOLS/verdict.py" apply --output "$RUNNER_TEMP/output.json" --pr "$PR" --head "$HEAD_SHA" --risky "${RISKY:-1}" --token-error "$token_error"

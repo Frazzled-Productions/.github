@@ -19,18 +19,32 @@ class Shape(unittest.TestCase):
             self.assertIsNone(re.search(r"^    if:", jobs, re.M), name)
 
     def test_openspec_install_is_the_pinned_script_on_every_runner(self):
+        fetch = "      - name: Fetch the shared OpenSpec tools at this workflow's commit\n"
+        step = (
+            "      - name: Install the pinned openspec CLI\n"
+            '        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ci/openspec-install.sh" "$RUNNER_TEMP/openspec-bin"\n'
+            "\n"
+            "      - name: Show the openspec CLI on PATH\n"
+            "        run: command -v openspec\n"
+        )
         for name in ("openspec-archive.yml", "openspec-overlap.yml", "openspec-docs-check.yml"):
             text = (WORKFLOWS / name).read_text(encoding="utf-8")
-            self.assertEqual(text.count("tools/ci/openspec-install.sh"), 1, name)
-            step = re.search(r"^      - name: Install the pinned openspec CLI\n(.*)\n", text, re.M)
-            self.assertIsNotNone(step, name)
-            self.assertNotIn("if:", step.group(1), name)
+            self.assertEqual(text.count(step), 1, name)
+            self.assertNotIn("continue-on-error", text, name)
+            self.assertLess(text.index(fetch), text.index(step), name)
+            first_use = re.search(r"^\s+(?:run: )?(?:openspec (?:validate|archive)|python3 .*archive\.py)", text, re.M)
+            if first_use:
+                self.assertLess(text.index(step), first_use.start(), name)
             self.assertRegex(text, r"install-openspec:\n(?:        .*\n)*?        default: false\n", name)
 
-    def test_no_npm_or_second_pin_for_openspec(self):
+    def test_no_npm_node_or_second_pin_for_openspec(self):
+        for name in ("openspec-archive.yml", "openspec-overlap.yml", "openspec-docs-check.yml"):
+            self.assertNotIn("setup-node", (WORKFLOWS / name).read_text(encoding="utf-8"), name)
         for path in WORKFLOWS.glob("*.yml"):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("@fission-ai/openspec", text, path.name)
+            if path.name != "self-test.yml":  # Its pin check reads the release's SHA256SUMS.
+                self.assertNotIn("Fission-AI/OpenSpec", text, path.name)
             self.assertNotIn("if: inputs.install-openspec", text, path.name)
 
 

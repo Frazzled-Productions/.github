@@ -5,6 +5,11 @@
 # OpenSpec workflow, on hosted Linux and on the Mac runners (ops #363). No sudo, and no fallback to
 # another openspec: a silent fallback would let the version differ between runners.
 #
+# <dest-dir>/openspec is a wrapper round the binary. The binary is a Bun executable, which loads
+# bunfig.toml from its working folder, and a preload there could make a failing check pass, so a PR
+# could change the guard it is judged by. This install runs before the caller's checkout, so a PR cannot
+# touch the wrapper. A parent folder's bunfig.toml is not loaded.
+#
 # This is the only place that names the version. To move it, change the three pins below, taking the
 # checksums from the release's SHA256SUMS. OPENSPEC_BASE_URL overrides the download URL, for tests.
 # Tests: tools/ci/test-openspec-install.sh.
@@ -31,10 +36,21 @@ mkdir -p "$dest"
 work="$(mktemp -d "${dest%/}/openspec-download.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 tarball="openspec-${platform}.tar.gz"
-curl -sSfL "${base}/v${version}/${tarball}" -o "${work}/${tarball}" \
+curl -sSfL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 \
+  "${base}/v${version}/${tarball}" -o "${work}/${tarball}" \
   || { echo "::error::The openspec ${version} download failed: ${base}/v${version}/${tarball}"; exit 1; }
-(cd "$work" && echo "${sum}  ${tarball}" | shasum -a 256 -c -)
+(cd "$work" && echo "${sum}  ${tarball}" | shasum -a 256 -c -) \
+  || { echo "::error::The openspec ${version} download does not match its pinned SHA-256."; exit 1; }
 tar -xzf "${work}/${tarball}" -C "$work" openspec
-mv "${work}/openspec" "${dest%/}/openspec"
-"${dest%/}/openspec" --version
+mv "${work}/openspec" "${dest%/}/openspec-binary"
+(cd "$work" && "${dest%/}/openspec-binary" --version)
+cat > "${dest%/}/openspec" <<WRAPPER
+#!/bin/sh
+if [ -e bunfig.toml ] || [ -L bunfig.toml ]; then
+  echo "::error::Refusing to run openspec: a bunfig.toml in \$(pwd) could change what the check does."
+  exit 1
+fi
+exec "${dest%/}/openspec-binary" "\$@"
+WRAPPER
+chmod +x "${dest%/}/openspec"
 echo "${dest%/}" >> "${GITHUB_PATH:?GITHUB_PATH is not set}"

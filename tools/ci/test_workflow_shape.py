@@ -32,6 +32,7 @@ class Shape(unittest.TestCase):
             self.assertEqual(text.count(step), 1, name)
             self.assertNotIn("continue-on-error", text, name)
             self.assertLess(text.index(fetch), text.index(step), name)
+            self.assertLess(text.index(step), text.index("uses: actions/checkout@"), name)
             first_use = re.search(r"^\s+(?:run: )?(?:openspec (?:validate|archive)|python3 .*archive\.py)", text, re.M)
             if first_use:
                 self.assertLess(text.index(step), first_use.start(), name)

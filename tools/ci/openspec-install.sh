@@ -36,7 +36,7 @@ mkdir -p "$dest"
 work="$(mktemp -d "${dest%/}/openspec-download.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 tarball="openspec-${platform}.tar.gz"
-curl -sSfL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 \
+curl -sSfL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 \
   "${base}/v${version}/${tarball}" -o "${work}/${tarball}" \
   || { echo "::error::The openspec ${version} download failed: ${base}/v${version}/${tarball}"; exit 1; }
 (cd "$work" && echo "${sum}  ${tarball}" | shasum -a 256 -c -) \

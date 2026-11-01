@@ -1,8 +1,8 @@
 """Shape checks on the shared workflows that a lint does not make. Run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
 
 A required check's job must never carry an `if:` (a skipped job counts as passing a required check),
-and the openspec CLI install must stay behind `install-openspec` (default false), so a self-hosted
-caller that leaves the input unset installs nothing.
+and every OpenSpec workflow installs the one pinned binary through tools/ci/openspec-install.sh, on
+every runner, with no npm or Node step (ops #363). `install-openspec` stays accepted and does nothing.
 """
 import pathlib
 import re
@@ -18,14 +18,20 @@ class Shape(unittest.TestCase):
             jobs = text.split("\njobs:\n", 1)[1]
             self.assertIsNone(re.search(r"^    if:", jobs, re.M), name)
 
-    def test_install_steps_are_gated_and_default_off(self):
+    def test_openspec_install_is_the_pinned_script_on_every_runner(self):
         for name in ("openspec-archive.yml", "openspec-overlap.yml", "openspec-docs-check.yml"):
             text = (WORKFLOWS / name).read_text(encoding="utf-8")
+            self.assertEqual(text.count("tools/ci/openspec-install.sh"), 1, name)
+            step = re.search(r"^      - name: Install the pinned openspec CLI\n(.*)\n", text, re.M)
+            self.assertIsNotNone(step, name)
+            self.assertNotIn("if:", step.group(1), name)
             self.assertRegex(text, r"install-openspec:\n(?:        .*\n)*?        default: false\n", name)
-            steps = re.findall(r"^      - (?:uses: actions/setup-node@.*|name: Install the openspec CLI)\n(.*)\n", text, re.M)
-            self.assertEqual(len(steps), 2, name)
-            for nxt in steps:
-                self.assertEqual(nxt.strip(), "if: inputs.install-openspec", name)
+
+    def test_no_npm_or_second_pin_for_openspec(self):
+        for path in WORKFLOWS.glob("*.yml"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("@fission-ai/openspec", text, path.name)
+            self.assertNotIn("if: inputs.install-openspec", text, path.name)
 
 
     def test_simulated_archive_never_hides_the_overlap_step(self):

@@ -90,7 +90,7 @@ on:
         type: string
         default: ''
       install-openspec:
-        description: Install the openspec CLI (@fission-ai/openspec 1.14.3 from npm) first, for a GitHub-hosted runner without it. Leave off on the self-hosted Mac.
+        description: No longer used, kept so existing callers still work. Every job installs the pinned binary (ops #363).
         type: boolean
         default: false
       archive-branch:
@@ -164,15 +164,8 @@ jobs:
           [ "$BRANCH" != "$BASE" ] || { echo "::error::archive-branch and base-branch must differ."; exit 1; }
           [ -n "$(sed '/^[[:space:]]*$/d' <<< "$REQUIRED_CONTEXTS")" ] || { echo "::error::required-contexts is empty."; exit 1; }
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: inputs.install-openspec
-        with:
-          node-version: '24'
-
-      - name: Install the openspec CLI
-        if: inputs.install-openspec
-        # Exact version, no install scripts, as self-test.yml installs it.
-        run: npm install --global --ignore-scripts @fission-ai/openspec@1.14.3 # zizmor: ignore[adhoc-packages]
+      - name: Install the pinned openspec CLI
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ci/openspec-install.sh" "$RUNNER_TEMP/openspec-bin"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

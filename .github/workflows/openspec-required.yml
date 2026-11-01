@@ -3,8 +3,8 @@ name: OpenSpec required (reusable)
 # "OpenSpec required": a PR that changes more than docs must carry an OpenSpec change (owner decision
 # 23 October 2026). Docs-only PRs pass (tools/ci/changed_files.py's docs rule, plus the repo's context
 # budget file); so do the archive bot's PRs, which only touch openspec/, with no exemption by author or
-# branch. Dependabot PRs that only change dependency manifests, lock files or workflow files pass, with
-# a notice. Anything else needs an active change in openspec/changes/<name>/ with a delta or
+# branch. Dependabot PRs that only change dependency manifests, lock files, Xcode project files
+# (project.pbxproj, a root project.yml) or workflow files pass, with a notice. Anything else needs an active change in openspec/changes/<name>/ with a delta or
 # `skip_specs: true`; a repo with no openspec/ is told to adopt OpenSpec first
 # (ops/standards/openspec-adoption/README.md). The one exception is the `no-spec` label added by
 # fraserbrookhouse (read from the PR's issue events, fixed in the tool, never an input) with a

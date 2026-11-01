@@ -1,5 +1,5 @@
 """Tests for requirement_length.py. Run: python3 -m unittest discover -s tools/openspec -p 'test_*.py'
-The cross-checks against OpenSpec need the openspec CLI (Homebrew on the Mac, npm on self-test)."""
+The cross-checks against OpenSpec need the openspec CLI (the pinned binary on self-test)."""
 import io
 import os
 import pathlib

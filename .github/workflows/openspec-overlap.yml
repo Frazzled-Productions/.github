@@ -33,11 +33,11 @@ on:
   workflow_call:
     inputs:
       runs-on:
-        description: Runner labels as a JSON array, or a JSON string. Needs git, gh, python3 and the openspec CLI. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
+        description: Runner labels as a JSON array, or a JSON string. Needs git, gh and python3. Empty means the organisation's LIGHT_RUNNER, else ubuntu-latest.
         type: string
         default: ''
       install-openspec:
-        description: Install the openspec CLI (@fission-ai/openspec 1.14.3 from npm) first, for a GitHub-hosted runner without it. Leave off on the self-hosted Mac.
+        description: No longer used, kept so existing callers still work. Every job installs the pinned binary (ops #363).
         type: boolean
         default: false
       base-branch:
@@ -90,15 +90,11 @@ jobs:
           fi
           echo "Shared tools: $TOOLS_REPO at $want (job.workflow_sha $TOOLS_SHA)"
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: inputs.install-openspec
-        with:
-          node-version: '24'
+      - name: Install the pinned openspec CLI
+        run: bash "$RUNNER_TEMP/frazzled-openspec-tools/tools/ci/openspec-install.sh" "$RUNNER_TEMP/openspec-bin"
 
-      - name: Install the openspec CLI
-        if: inputs.install-openspec
-        # Exact version, no install scripts, as self-test.yml installs it.
-        run: npm install --global --ignore-scripts @fission-ai/openspec@1.14.3 # zizmor: ignore[adhoc-packages]
+      - name: Show the openspec CLI on PATH
+        run: command -v openspec
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

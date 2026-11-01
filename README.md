@@ -95,8 +95,10 @@ these fetches its Python and shell tools from **this repository at the commit th
 the runner's temp folder, never from the
 caller's tree, so a PR cannot change the guard it is judged by. The tools and their tests live in
 `tools/openspec/` and `tools/ci/`; `self-test.yml` runs the tests on every PR here. Runner default: the
-light route above (the light runners have git, gh, jq, python3 and the Homebrew `openspec` CLI); a
-caller on GitHub-hosted runners passes `install-openspec: true`. Snippets are in each file's header.
+light route above (the light runners have git, gh, jq and python3). Every job installs one pinned,
+checksum-verified OpenSpec binary with `tools/ci/openspec-install.sh`, the only place that names the
+version, on Linux X64 and macOS ARM64. `install-openspec` is still accepted and does nothing. Snippets are
+in each file's header.
 - **`openspec-archive.yml`** - the archive bot. On the caller's push to the base branch (or "Run
   workflow") it archives each merged change with `openspec archive <name> --yes`, checks the result
   (`tools/openspec/archive.py`), pushes the archive branch, opens the PR, approves that PR's own held
@@ -152,9 +154,9 @@ caller on GitHub-hosted runners passes `install-openspec: true`. Snippets are in
   <reason>` line directly above it, and a removed one a `# removed <spec>: <reason>` line. No `if:` on
   the job; git and python3 only. Inputs: optional `runs-on`, `budget-file`.
 
-`install-openspec` (default `false`): when `true`, the archive, overlap and docs-only check workflows
-install `@fission-ai/openspec@1.14.3` from npm (`--ignore-scripts`) first, so a repo without a Mac
-runner can run them with `runs-on: '"ubuntu-latest"'`. Repos with the self-hosted Mac leave it off.
+`install-openspec` (default `false`) no longer does anything: the archive, overlap and docs-only check
+workflows install the pinned binary on every runner, so `runs-on: '"ubuntu-latest"'` needs nothing else.
+The input stays so existing callers keep working (ops #363).
 The adoption kit, with every caller in a Mac and a GitHub-hosted variant and the rollout order (ship,
 add the callers and the archive caller's `required-contexts`, see both report on a PR, then require
 them), is `ops/standards/openspec-adoption/`.
@@ -180,8 +182,8 @@ tests: `tools/liveness/`. Runbook: `ops/runbooks/command-centre.md`.
 ## Self-test and releasing
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
 Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode, the
-OpenSpec tools' unit tests (with the `openspec` CLI from npm at a pinned version), and the
-`openspec-changed-files`, `openspec-overlap` (through `install-openspec`) and `openspec-required`
+OpenSpec tools' unit tests (with the pinned `openspec` binary), and the
+`openspec-changed-files`, `openspec-overlap` and `openspec-required`
 (warn-only, its "adopt OpenSpec first" result checked) workflows against this repo, proving the tools
 fetch. `Context budget` checks this repo's own `.github/context-budget.txt`. From ops #345 it also
 runs the `tools/ios` and `tools/ci` script tests with shellcheck, and calls `em-dash-check` with no

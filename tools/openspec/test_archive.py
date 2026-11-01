@@ -1,5 +1,5 @@
 """Tests for archive.py check and simulate. Run: python3 -m unittest discover -s tools/openspec -p 'test_*.py'
-Needs the openspec CLI (Homebrew, on the CI Mac)."""
+Needs the openspec CLI (the pinned binary on self-test)."""
 import contextlib
 import importlib
 import io

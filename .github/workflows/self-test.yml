@@ -7,10 +7,9 @@ name: Self-test
 #   - test-integrity: runs the reusable check on this repo's own PRs, in warn-only mode;
 #   - OpenSpec tools: the unit tests of tools/ (approve_runs.py guards, archive.py checks, requirement_length.py,
 #     changed_files.py rules, required.py, context_budget.py, the command-centre liveness rule) with
-#     the openspec CLI installed from npm at a pinned version;
+#     the pinned openspec binary from tools/ci/openspec-install.sh;
 #   - OpenSpec changed files, overlap and required: the reusable workflows run against this repo, which
-#     proves they fetch their tools from their own commit (job.workflow_sha). Overlap installs the CLI
-#     through its install-openspec input. OpenSpec required runs warn-only, because this repo has no
+#     proves they fetch their tools from their own commit (job.workflow_sha). OpenSpec required runs warn-only, because this repo has no
 #     openspec/ (its tooling changes are specced in roast-conductor's openspec-tooling, Fraser,
 #     23 October 2026), and its result is checked: "adopt OpenSpec first" on a code PR, a pass on a
 #     docs-only one. The archive and docs-only check workflows are exercised by their callers;
@@ -72,12 +71,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '24'
-      - name: Install the openspec CLI
-        # Exact version, no install scripts; a test-only tool on a throwaway runner.
-        run: npm install --global --ignore-scripts @fission-ai/openspec@1.14.3 # zizmor: ignore[adhoc-packages]
+      - name: Install the pinned openspec CLI
+        run: bash tools/ci/openspec-install.sh "$RUNNER_TEMP/openspec-bin"
       - name: Unit tests
         run: |
           python3 -m unittest discover -s tools/ci -p 'test_*.py' -v
@@ -108,6 +103,16 @@ jobs:
           echo "$RUNNER_TEMP/gitleaks-bin" >> "$GITHUB_PATH"
       - name: gitleaks installer and HEAD-only scan
         run: bash tools/ci/test-gitleaks-install.sh
+      - name: OpenSpec installer tests
+        run: bash tools/ci/test-openspec-install.sh
+      - name: OpenSpec pins match the release
+        # The Mac pin never runs here, so check both against the release's own SHA256SUMS.
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version=//p' tools/ci/openspec-install.sh)
+          sums=$(curl -sSfL --retry 3 --retry-all-errors "https://github.com/Fission-AI/OpenSpec/releases/download/v${version}/SHA256SUMS")
+          grep -qx "$(sed -n 's/^sum_linux=//p' tools/ci/openspec-install.sh)  openspec-linux-x64.tar.gz" <<< "$sums"
+          grep -qx "$(sed -n 's/^sum_darwin=//p' tools/ci/openspec-install.sh)  openspec-darwin-arm64.tar.gz" <<< "$sums"
 
   route-default:
     name: Light route, no runs-on
@@ -153,7 +158,7 @@ jobs:
     uses: ./.github/workflows/openspec-overlap.yml # zizmor: ignore[self-repository]
     with:
       runs-on: '"ubuntu-latest"'
-      install-openspec: true
+      install-openspec: true # Proves an old caller that still passes it keeps working.
 
   openspec-required:
     name: OpenSpec required

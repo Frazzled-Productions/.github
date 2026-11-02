@@ -118,9 +118,10 @@ def decide_report(outcome, earlier, open_issue, auth=False):
              if auth else f"it has failed at least {streak} runs in a row")
     body = (f"{OWNER} the hosted minutes switch cannot run: {cause}. `LIGHT_RUNNER` is keeping its last "
             "value. Hosted mode with the minutes gone means red checks; Mac mode means checks wait for the "
-            f"Mac. Read the latest run of `{WORKFLOW_FILE}`: it gives the HTTP status. To set the route by "
-            "hand, follow the manual override in `runbooks/mac-runners.md` in ops. This issue closes itself "
-            "after a good run.")
+            f"Mac. Read the latest run of `{WORKFLOW_FILE}`: it gives the HTTP status. Manual override: set "
+            "`HOSTED_SWITCH_WRITE` to `false` so the switch cannot overwrite it, then set `LIGHT_RUNNER` and "
+            "`OPS_LIGHT_RUNNER` by hand (steps in `runbooks/mac-runners.md` in ops). This issue closes "
+            "itself after a good run.")
     return dict(action="update" if open_issue else "open", issue=open_issue, body=body)
 
 

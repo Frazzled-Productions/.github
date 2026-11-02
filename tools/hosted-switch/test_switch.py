@@ -268,7 +268,7 @@ class Report(unittest.TestCase):
         self.assertEqual(d["action"], "open")
         self.assertIn("@fraserbrookhouse", d["body"])
         self.assertIn("401 or 403", d["body"])
-        self.assertIn("manual override", d["body"])
+        self.assertIn("Manual override: set `HOSTED_SWITCH_WRITE` to `false`", d["body"])
 
     def test_a_refused_credential_updates_an_open_issue(self):
         self.assertEqual(switch.decide_report("failure", [], 7, auth=True)["action"], "update")

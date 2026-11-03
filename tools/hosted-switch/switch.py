@@ -30,6 +30,8 @@ MODES = {
 FAILURES_TO_REPORT = 3
 TITLE = "Hosted minutes switch failing"
 OWNER = "@fraserbrookhouse"
+BOT = "app/github-actions"  # the failure issue's author: the report step uses the workflow's own token
+MISSING = "no credential: HOSTED_SWITCH_TOKEN is not set in the hosted-switch environment"
 
 
 class Failed(Exception):
@@ -37,9 +39,13 @@ class Failed(Exception):
 
 
 def failure_text(stderr):
-    """A gh error reduced to its HTTP status: gh's own text can name a private repo."""
+    """A gh error reduced to its HTTP status: gh's own text can name a private repo. A 403 for a rate
+    limit says so, as it is no sign of a bad credential."""
     found = re.search(r"HTTP (\d{3})", stderr)
-    return f"HTTP {found.group(1)}" if found else "no HTTP status"
+    if not found:
+        return "no HTTP status"
+    limited = found.group(1) == "403" and re.search(r"rate limit", stderr, re.I)
+    return f"HTTP {found.group(1)}" + (" (rate limit)" if limited else "")
 
 
 def gh(args):
@@ -74,7 +80,12 @@ def run(ghf, now, write):
         raise Failed("the public repo list does not include this repo")
     total = private_minutes(usage, public, now.day)
     mode = "mac" if total >= SWITCH_AT else "hosted"
-    current = {name: ghf(["api", f"orgs/{ORG}/actions/variables/{name}"])["value"] for name in MODES[mode]}
+    current = {}
+    for name in MODES[mode]:
+        try:
+            current[name] = ghf(["api", f"orgs/{ORG}/actions/variables/{name}"])["value"]
+        except Failed as e:  # a variable's name is not private; say which one, as a 404 means it is missing
+            raise Failed(f"reading {name}: {e}") from None
     changed = [name for name, value in MODES[mode].items() if current[name] != value]
     if write:
         for name in changed:
@@ -93,9 +104,10 @@ def writes_on(value):
 
 
 def refused(text):
-    """A 401 or 403: the credential is expired or lacks access, which no later run repairs, and in hosted
-    mode the minutes keep running out meanwhile, so it is reported on the first run."""
-    return re.search(r"HTTP 40[13]\b", text) is not None
+    """A missing credential, or a 401 or 403 other than a rate limit: the credential is missing, expired or
+    lacks access, which no later run repairs, and in hosted mode the minutes keep running out meanwhile,
+    so it is reported on the first run."""
+    return MISSING in text or re.search(r"HTTP 40[13](?! \(rate limit\))\b", text) is not None
 
 
 def decide_report(outcome, earlier, open_issue, auth=False):
@@ -114,7 +126,8 @@ def decide_report(outcome, earlier, open_issue, auth=False):
         streak += 1
     if streak < FAILURES_TO_REPORT and not auth:
         return dict(action="none")
-    cause = ("its credential was refused (HTTP 401 or 403), so it has probably expired"
+    cause = ("its credential is missing or was refused (HTTP 401 or 403), so it has probably expired: set "
+             "`HOSTED_SWITCH_TOKEN` in the `hosted-switch` environment"
              if auth else f"it has failed at least {streak} runs in a row")
     body = (f"{OWNER} the hosted minutes switch cannot run: {cause}. `LIGHT_RUNNER` is keeping its last "
             "value. Hosted mode with the minutes gone means red checks; Mac mode means checks wait for the "
@@ -126,8 +139,11 @@ def decide_report(outcome, earlier, open_issue, auth=False):
 
 
 def report(ghf, outcome, auth=False):
-    issues = ghf(["issue", "list", "--state", "open", "--search", f'"{TITLE}" in:title', "--json", "number,title"])
-    open_issue = next((i["number"] for i in issues if i["title"] == TITLE), None)
+    # Only its own issue: the repo is public, so anyone can open one with the same title.
+    issues = ghf(["issue", "list", "--state", "open", "--author", BOT, "--search", f'"{TITLE}" in:title',
+                  "--json", "number,title,author"])
+    open_issue = next((i["number"] for i in issues
+                       if i["title"] == TITLE and (i.get("author") or {}).get("login") == BOT), None)
     runs = ghf(["run", "list", "--workflow", WORKFLOW_FILE, "--branch", "main", "--status", "completed",
                 "--limit", str(FAILURES_TO_REPORT), "--json", "conclusion"])
     d = decide_report(outcome, [r["conclusion"] for r in runs], open_issue, auth)
@@ -144,6 +160,8 @@ def report(ghf, outcome, auth=False):
 def main(argv):
     try:
         if argv[:1] == ["run"]:
+            if not os.environ.get("GH_TOKEN"):  # gh then prints no HTTP status, so say it here
+                raise Failed(MISSING)
             now = dt.datetime.now(dt.timezone.utc)
             print(summary(run(gh, now, writes_on(os.environ.get("HOSTED_SWITCH_WRITE")))))
         elif argv[:1] == ["report"] and len(argv) == 2:

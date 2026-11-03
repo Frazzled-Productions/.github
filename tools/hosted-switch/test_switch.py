@@ -168,7 +168,7 @@ class FailsSafe(unittest.TestCase):
     def test_unreadable_variable(self):
         g = FakeGH(rows(1000), light=LIGHT, ops=OPS_MAC)
         del g.vars["OPS_LIGHT_RUNNER"]
-        with self.assertRaises(switch.Failed):
+        with self.assertRaisesRegex(switch.Failed, "OPS_LIGHT_RUNNER.*HTTP 404"):  # says which one is missing
             switch.run(g, MID, write=True)
         self.assertEqual(g.writes, [])
 
@@ -196,6 +196,14 @@ class FailsSafe(unittest.TestCase):
         message = switch.failure_text("gh: secret-repo-name Not Found (HTTP 404)")
         self.assertEqual(message, "HTTP 404")
         self.assertEqual(switch.failure_text("connection reset, secret-repo-name"), "no HTTP status")
+
+    def test_a_rate_limit_403_is_not_a_refused_credential(self):
+        for stderr in ("HTTP 403: API rate limit exceeded for installation ID 1 (secret-repo-name)",
+                       "HTTP 403: You have exceeded a secondary rate limit."):
+            text = switch.failure_text(stderr)
+            self.assertEqual(text, "HTTP 403 (rate limit)")
+            self.assertFalse(switch.refused(text))
+        self.assertTrue(switch.refused(switch.failure_text("HTTP 403: Resource not accessible")))
 
 
 class RealGh(unittest.TestCase):
@@ -231,7 +239,8 @@ class NoPrivateNameInPublicLogs(unittest.TestCase):
         def fake(cmd, **_):
             return types.SimpleNamespace(returncode=1, stdout="", stderr=stderr)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(switch.subprocess, "run", fake), mock.patch.dict(os.environ, env or {}), \
+        env = {"GH_TOKEN": "fake", **(env or {})}
+        with mock.patch.object(switch.subprocess, "run", fake), mock.patch.dict(os.environ, env), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = switch.main(argv)
         return code, out.getvalue() + err.getvalue()
@@ -251,6 +260,18 @@ class NoPrivateNameInPublicLogs(unittest.TestCase):
                 target.write_text("", encoding="utf-8")
                 self.run_main(stderr, ["run"], {"GITHUB_OUTPUT": str(target)})
                 self.assertEqual("auth-failed=true" in target.read_text(encoding="utf-8"), flagged, stderr)
+
+    def test_a_missing_secret_is_flagged_and_named(self):
+        """gh with no token prints no HTTP status, so the run says so itself (GITHUB_ACTIONS, empty GH_TOKEN)."""
+        with tempfile.TemporaryDirectory() as d:
+            target = pathlib.Path(d) / "output"
+            target.write_text("", encoding="utf-8")
+            code, printed = self.run_main("gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN "
+                                          "environment variable.", ["run"], {"GITHUB_OUTPUT": str(target),
+                                                                             "GH_TOKEN": ""})
+            self.assertEqual(code, 1)
+            self.assertIn("HOSTED_SWITCH_TOKEN", printed)
+            self.assertIn("auth-failed=true", target.read_text(encoding="utf-8"))
 
 
 class Report(unittest.TestCase):
@@ -289,6 +310,57 @@ class Report(unittest.TestCase):
     def test_the_body_names_no_private_detail(self):
         body = switch.decide_report("failure", ["failure"] * 2, None)["body"]
         self.assertNotRegex(body, r"koinori|plan-bee|ghp_|github_pat_")
+
+
+class ReportThroughGh(unittest.TestCase):
+    """report() against a working fake gh, so the issue and run calls' arguments are checked."""
+
+    def fake(self, issues, conclusions):
+        calls = []
+
+        def ghf(args):
+            calls.append(args)
+            if args[:2] == ["issue", "list"]:
+                return issues
+            if args[:2] == ["run", "list"]:
+                return [dict(conclusion=c) for c in conclusions]
+            return None
+        return ghf, calls
+
+    def test_the_lookups_ask_for_its_own_issue_and_main_s_finished_runs(self):
+        ghf, calls = self.fake([], ["failure", "failure"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            switch.report(ghf, "failure")
+        issue_list, run_list, create = calls
+        self.assertEqual(issue_list[:2], ["issue", "list"])
+        self.assertEqual(issue_list[issue_list.index("--author") + 1], "app/github-actions")
+        self.assertEqual(issue_list[issue_list.index("--state") + 1], "open")
+        for flag, value in (("--workflow", "hosted-minutes-switch.yml"), ("--branch", "main"),
+                            ("--status", "completed"), ("--json", "conclusion")):
+            self.assertEqual(run_list[run_list.index(flag) + 1], value)
+        self.assertEqual(create[:2], ["issue", "create"])
+        self.assertEqual(create[create.index("--title") + 1], switch.TITLE)
+
+    def test_a_look_alike_issue_from_someone_else_is_not_edited(self):
+        """The search is limited to the workflow's own issues; a same-title issue it returns is still
+        matched on the bot author, so an outsider's issue is never edited in place of opening one."""
+        outsider = dict(number=9, title=switch.TITLE, author=dict(login="someone"))
+        ghf, calls = self.fake([outsider], [])
+        with contextlib.redirect_stdout(io.StringIO()):
+            switch.report(ghf, "failure", auth=True)
+        self.assertEqual(calls[-1][:2], ["issue", "create"])
+
+    def test_its_own_issue_is_edited_then_closed(self):
+        mine = dict(number=7, title=switch.TITLE, author=dict(login="app/github-actions"))
+        ghf, calls = self.fake([mine], ["failure"] * 3)
+        with contextlib.redirect_stdout(io.StringIO()):
+            switch.report(ghf, "failure")
+        self.assertEqual(calls[-1][:3], ["issue", "edit", "7"])
+        ghf, calls = self.fake([mine], ["failure"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            switch.report(ghf, "success")
+        self.assertEqual(calls[-1][:3], ["issue", "close", "7"])
+        self.assertIn("--comment", calls[-1])
 
 
 class WorkflowShape(unittest.TestCase):

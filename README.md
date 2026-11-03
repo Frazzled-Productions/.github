@@ -179,6 +179,18 @@ on a stale watcher while the Mac sleeps, and a variable never written is "not co
 for every 3 hours, but GitHub delivers it about every 3 to 5 hours, so it is a coarse alarm. Logic and
 tests: `tools/liveness/`. Runbook: `ops/runbooks/command-centre.md`.
 
+## Hosted minutes switch (not reusable)
+`hosted-minutes-switch.yml` runs here on GitHub-hosted Ubuntu (free, public repo), so it keeps working
+when the private minutes are gone and when the Mac is asleep. Each run reads the month's Actions minutes,
+leaves out public repos, and sets the organisation variables `LIGHT_RUNNER` and `OPS_LIGHT_RUNNER`:
+`"ubuntu-latest"` under 2,700 of the 3,000 included minutes, the Mac labels at 2,700 or more. The month's
+reset is the switch back. It writes nothing until the repository variable `HOSTED_SWITCH_WRITE` is
+`true`, and its credential is a secret of the `hosted-switch` environment, restricted to `main`. A
+refused credential opens one issue mentioning Fraser on the first run; any other failure does after
+three in a row. It is dispatch only until that credential exists; then a PR adds the hourly schedule.
+Logic and tests: `tools/hosted-switch/`. Runbook: `ops/runbooks/mac-runners.md`; spec: ops OpenSpec
+`hosted-minutes-switch`.
+
 ## Self-test and releasing
 `self-test.yml` runs actionlint and zizmor on every PR and on main (GitHub-hosted Ubuntu, never the
 Mac runner: this repo is public), plus `test-integrity` on this repo's own PRs in warn-only mode, the

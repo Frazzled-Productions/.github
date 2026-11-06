@@ -136,6 +136,15 @@ class ArchiveStep(unittest.TestCase):
         self.assertEqual(fakegh.option(issue, "--title"), "OpenSpec archive failed: all changes")
         self.assertEqual(self.pushed(), [])
 
+    def test_skip_on_with_every_change_not_started_archives_nothing(self):
+        self.change("a-proposal", "- [ ] 1.1 a\n")
+        code, out = self.run_step(SKIP_NOT_STARTED="true")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Not started (no task ticked), left in place: a-proposal", out)
+        self.assertIn("Nothing to archive.", out)
+        self.assertEqual(self.gh_calls(["pr", "create"]), [])
+        self.assertEqual(self.pushed(), [])
+
     # Titles
 
     def names(self, n):

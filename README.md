@@ -112,7 +112,12 @@ in each file's header.
   change, the bot comments on its own failure issue for it (linking the run and the archive PR) and
   closes it, once auto-merge is on (if a check then fails, the stuck job opens its own issue). Inputs: `required-contexts` (required, one
   per line), optional `runs-on`, `archive-branch` (default `openspec-archive`), `base-branch` (`main`),
-  `stuck-minutes` (30), `install-openspec`. The caller job grants `actions: write`, `contents: write`,
+  `stuck-minutes` (30), `skip-not-started` (false: when true, a change with at least one task and none
+  ticked is left in place and named in the run log rather than failing the run, for repos whose
+  approved proposals merge to the base branch before their build; a build merged with no task ticked is
+  then skipped too, and `archive.py simulate` in the overlap check does not know about the skip),
+  `install-openspec`. Past 200 characters of change names, the PR title and any failure issue's title
+  give the count and the bodies keep the list. The caller job grants `actions: write`, `contents: write`,
   `pull-requests: write`, `issues: write`, `checks: read`; the repo needs "Allow GitHub Actions to
   create and approve pull requests".
 - **`openspec-overlap.yml`** - on a PR: `openspec validate --strict` on each change it adds or edits,

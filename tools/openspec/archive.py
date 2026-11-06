@@ -6,6 +6,12 @@ Frazzled-Productions/.github; also runs locally against any checkout (the curren
 OPENSPEC_ROOT).
 
   archive.py list              print each active change (not under archive/), in name order
+  archive.py list --skip-not-started
+                               the same, less each change not yet started (at least one task, none
+                               ticked, by `openspec list --json`), whose names go to stderr; a folder
+                               name that is not kebab-case is never left out, so the workflow's name
+                               guard still sees it. If the task counts cannot be read it prints no
+                               names and exits 1 (koinori #2591)
   archive.py archive <name>    run `openspec archive <name> --yes`, then the checks below
   archive.py check             run the checks only
   archive.py simulate [--changed-files FILE]
@@ -27,6 +33,7 @@ Checks (each failure is printed and makes the exit code 1):
 
 The em dash is written as chr(0x2014) so this file contains none itself.
 """
+import json
 import os
 import pathlib
 import re
@@ -62,6 +69,29 @@ def active_changes():
     if not CHANGES.is_dir():
         return []
     return sorted(p.name for p in CHANGES.iterdir() if p.is_dir() and p.name != "archive" and not p.name.startswith("."))
+
+
+KEBAB = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def not_started(names):
+    """The names among `names` with at least one task and none ticked, by `openspec list --json`.
+
+    Called directly rather than through run(), which echoes to stdout and joins stderr: stdout here is
+    the workflow's list of names to archive, and the JSON must be parsed alone. Raises RuntimeError
+    when the counts cannot be read, so a failure never looks like an empty list."""
+    try:
+        proc = subprocess.run(["openspec", "list", "--json"], cwd=ROOT, env=ENV, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise RuntimeError("openspec list --json: openspec not found on PATH")
+    if proc.returncode != 0:
+        raise RuntimeError(f"openspec list --json failed (exit {proc.returncode}): {proc.stderr.strip()}")
+    try:
+        counts = {c["name"]: c for c in json.loads(proc.stdout)["changes"]}
+    except (ValueError, KeyError, TypeError) as e:
+        raise RuntimeError(f"openspec list --json gave output that could not be read ({e})")
+    return [n for n in names if KEBAB.match(n) and n in counts
+            and counts[n].get("totalTasks", 0) > 0 and counts[n].get("completedTasks", 0) == 0]
 
 
 def purpose_problems(root):
@@ -190,8 +220,21 @@ def simulate(changed=None):
 
 
 def main(argv):
-    if argv[:1] == ["list"]:
+    if argv == ["list"]:
         print("\n".join(active_changes()))
+        return 0
+    if argv == ["list", "--skip-not-started"]:
+        names = active_changes()
+        try:
+            skipped = set(not_started(names)) if names else set()
+        except RuntimeError as e:
+            print(f"PROBLEM: {e}", file=sys.stderr)
+            return 1
+        for name in names:
+            if name in skipped:
+                print(f"Not started (no task ticked), left in place: {name}", file=sys.stderr)
+            else:
+                print(name)
         return 0
     if argv[:1] == ["check"]:
         return 0 if check() else 1

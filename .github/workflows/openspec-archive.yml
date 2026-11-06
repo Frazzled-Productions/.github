@@ -3,8 +3,13 @@ name: OpenSpec archive (reusable)
 # Archives every OpenSpec change on the caller's base branch into its main specs once the change's PR
 # has merged (owner decision 22 October 2026; OpenSpec's docs/team-workflow.md recommends archiving
 # after merge). Moved here from roast-conductor (owner decision 23 October 2026) so every app repo
-# adopts it with a short caller. Proposals live on branches, so any active change found on the base
-# branch (openspec/changes/<name>, not under archive/) has merged.
+# adopts it with a short caller. By default every active change found on the base branch
+# (openspec/changes/<name>, not under archive/) is taken as merged, which holds where proposals live
+# on branches until built. A repo whose approved proposals merge to the base branch before their build
+# sets skip-not-started: true, and the job then leaves in place each change with at least one task and
+# none ticked, naming it in the run log (koinori #2591). A change with some tasks ticked and some not
+# still fails loudly, as does a not-started change when the input is off. A build merged with no task
+# ticked looks like a proposal and is skipped quietly: a known limit of the input.
 #
 # The Python and shell tools come from this repository at the commit this workflow runs from
 # (job.workflow_sha: the SHA or tag the caller pins; for an annotated tag GitHub gives the tag object,
@@ -12,14 +17,16 @@ name: OpenSpec archive (reusable)
 # never come from the caller's tree, so a change in the caller cannot alter the guards it is judged by.
 #
 # archive job (caller's push to the base branch touching openspec/changes, or "Run workflow"):
-#   1. From a fresh fetch of the base branch, on the archive branch, archive each active change in
-#      name order with `openspec archive <name> --yes`, check the result (tools/openspec/archive.py:
+#   1. From a fresh fetch of the base branch, on the archive branch, archive each active change (less
+#      the not-started ones when skip-not-started is set) in name order with `openspec archive <name> --yes`, check the result (tools/openspec/archive.py:
 #      no "TBD - created" Purpose, `openspec validate --specs --strict`, `openspec validate
 #      --archived` (every archived change has all its tasks ticked), no em dash in openspec/,
 #      nothing outside openspec/ touched) and commit it as "Archive OpenSpec change <name> into the
 #      main specs".
 #   2. Push the branch (re-fetching and rebuilding once if the push is refused) and open, or reuse,
-#      the PR into the base branch.
+#      the PR into the base branch. When the change names would run past 200 characters, the PR title
+#      and any failure issue's title give the count instead (GitHub refuses a title over 256), and the
+#      bodies keep the full list.
 #   3. Approve the PR's own held checks (owner decision 22 October 2026, roast-conductor issue #168).
 #      GitHub holds the pull_request runs on a PR that github-actions[bot] opens ("action required").
 #      tools/openspec/approve_runs.py approves them only when the PR is the bot's own, from the
@@ -105,6 +112,13 @@ on:
         description: How long an archive PR may stay open before the stuck job opens an issue.
         type: number
         default: 30
+      skip-not-started:
+        description: >-
+          Leave in place each change with at least one task and none ticked (its build has not merged)
+          and name it in the run log, instead of failing on it. For repos whose approved proposals merge
+          to the base branch before their build.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -129,6 +143,7 @@ jobs:
       BRANCH: ${{ inputs.archive-branch }}
       BASE: ${{ inputs.base-branch }}
       REQUIRED_CONTEXTS: ${{ inputs.required-contexts }}
+      SKIP_NOT_STARTED: ${{ inputs.skip-not-started }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Fetch the shared OpenSpec tools at this workflow's commit
@@ -198,14 +213,26 @@ jobs:
 
           build() { # archive every active change on a fresh branch from the latest base; prints nothing on success
             if ! { git fetch --quiet origin "$BASE" && git checkout --quiet -B "$BRANCH" "origin/$BASE"; }; then fail "all changes" "Could not fetch $BASE."; fi
-            local name
+            local name list err
+            # Read into a variable first: through `done < <(...)` a failed list would be an empty one,
+            # and the job would exit 0 with "Nothing to archive.".
+            err=$(mktemp)
+            if [ "$SKIP_NOT_STARTED" = true ]; then
+              list=$(python3 "$TOOLS/tools/openspec/archive.py" list --skip-not-started 2> "$err")
+            else
+              list=$(python3 "$TOOLS/tools/openspec/archive.py" list 2> "$err")
+            fi
+            local listed=$?
+            cat "$err" >&2
+            cat "$err" >> "$LOG"
+            [ "$listed" = 0 ] || fail "all changes" "Could not list the active changes (output below)."
             while IFS= read -r name; do
               [ -n "$name" ] || continue
               # OpenSpec change names are kebab-case; anything else is refused rather than used in commands.
               [[ "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]] || fail "unexpected change folder" "openspec/changes has a folder named '$name', which is not a kebab-case change name."
               python3 "$TOOLS/tools/openspec/archive.py" archive "$name" >> "$LOG" 2>&1 || fail "$name" "Archiving or the checks failed (output below)."
               if ! { git add -A openspec && git commit --quiet -m "Archive OpenSpec change $name into the main specs"; }; then fail "$name" "Could not commit the archive."; fi
-            done < <(python3 "$TOOLS/tools/openspec/archive.py" list)
+            done <<< "$list"
             # Judged from git's raw diff with renames split, so nothing outside openspec/ and no symlink slips in.
             if [ -n "$(git rev-list "origin/$BASE..HEAD")" ] && ! python3 "$TOOLS/tools/ci/changed_files.py" openspec "origin/$BASE..HEAD" >> "$LOG" 2>&1; then
               fail "all changes" "The archive commits change something other than plain files under openspec/ (output below)."
@@ -216,29 +243,36 @@ jobs:
           names=$(git log --reverse --format=%s "origin/$BASE..HEAD" | sed -E 's/^Archive OpenSpec change (.*) into the main specs$/\1/')
           if [ -z "$names" ]; then echo "Nothing to archive."; exit 0; fi
           label=$(paste -sd ',' - <<< "$names" | sed 's/,/, /g')
+          count=$(wc -l <<< "$names" | tr -d ' ')
+          # GitHub refuses a title over 256 characters: past 200 of names, titles give the count and the
+          # bodies keep the full list.
+          short=$label
+          [ "${#label}" -le 200 ] || short="$count changes"
+          in_run="Changes in this run: $label."
 
           if ! git push --quiet --force origin "HEAD:refs/heads/$BRANCH" >> "$LOG" 2>&1; then
             echo "Push refused; rebuilding once from the latest $BASE." | tee -a "$LOG"
             build
-            git push --quiet --force origin "HEAD:refs/heads/$BRANCH" >> "$LOG" 2>&1 || fail "$label" "Could not push $BRANCH."
+            git push --quiet --force origin "HEAD:refs/heads/$BRANCH" >> "$LOG" 2>&1 || fail "$short" "Could not push $BRANCH. $in_run"
           fi
           sha=$(git rev-parse HEAD)
 
-          if [ "$(wc -l <<< "$names" | tr -d ' ')" = 1 ]; then title="Archive OpenSpec change $names into the main specs"
-          else title="Archive OpenSpec changes $label into the main specs"; fi
+          if [ "$count" = 1 ]; then title="Archive OpenSpec change $names into the main specs"
+          elif [ "$short" = "$label" ]; then title="Archive OpenSpec changes $label into the main specs"
+          else title="Archive $count OpenSpec changes into the main specs"; fi
           body="Archived automatically after these OpenSpec changes merged: $label (\`openspec archive <name> --yes\`, one commit each). Only openspec/ changes. The bot approves this PR's own held checks; GitHub merges once the required checks pass. Run: $RUN_URL"
           pr=$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json number --jq '.[0].number // empty')
           if [ -n "$pr" ]; then
             gh pr edit "$pr" --title "$title" --body "$body" >> "$LOG" 2>&1
           else
             url=$(gh pr create --base "$BASE" --head "$BRANCH" --title "$title" --body "$body" 2>> "$LOG") \
-              || fail "$label" "Could not open the archive PR. If the output says GitHub Actions is not permitted to create pull requests, turn on Settings > Actions > General > \"Allow GitHub Actions to create and approve pull requests\"."
+              || fail "$short" "$in_run Could not open the archive PR. If the output says GitHub Actions is not permitted to create pull requests, turn on Settings > Actions > General > \"Allow GitHub Actions to create and approve pull requests\"."
             pr=${url##*/}
           fi
 
           python3 "$TOOLS/tools/openspec/approve_runs.py" "$GITHUB_REPOSITORY" "$pr" "$sha" --branch "$BRANCH" --base "$BASE" 2>&1 | tee -a "$LOG"
-          [ "${PIPESTATUS[0]}" = 0 ] || fail "$label" "Could not approve the archive PR #$pr's own held checks (output below)."
-          gh pr merge "$pr" --auto --rebase --match-head-commit "$sha" >> "$LOG" 2>&1 || fail "$label" "Could not turn on auto-merge for #$pr."
+          [ "${PIPESTATUS[0]}" = 0 ] || fail "$short" "$in_run Could not approve the archive PR #$pr's own held checks (output below)."
+          gh pr merge "$pr" --auto --rebase --match-head-commit "$sha" >> "$LOG" 2>&1 || fail "$short" "$in_run Could not turn on auto-merge for #$pr."
           echo "Opened #$pr for $label at ${sha::7}; its checks are approved and running; it merges when they pass."
 
           # Close the bot's own open "OpenSpec archive failed: <name>" issues for the changes just archived

@@ -8,7 +8,8 @@ list per line in tmp/gh-calls.jsonl) and answers from environment variables:
   FAKE_GH_API     a JSON object mapping a `gh api` path to the JSON it answers (a GET of a path not
                   in it exits 1 with HTTP 404); with `--jq '.[] | tojson'` a list answer is printed
                   one element per line, as gh prints it
-`gh issue create` prints a new issue URL, `gh issue comment N` a comment URL; `gh api` with
+A call with a `--title` over 256 characters exits 1, as GitHub refuses it ("Title is too long").
+`gh pr create` prints a new PR URL, `gh issue create` prints a new issue URL, `gh issue comment N` a comment URL; `gh api` with
 `-X POST` or `-X PATCH` prints {}; the rest print nothing.
 """
 import json
@@ -27,7 +28,12 @@ fail = os.environ.get("FAKE_GH_FAIL")
 if fail and fail in " ".join(args):
     print("HTTP 403: refused by the fake gh", file=sys.stderr)
     sys.exit(1)
-if args[:2] == ["issue", "list"]:
+if "--title" in args and len(args[args.index("--title") + 1]) > 256:
+    print("Title is too long (maximum is 256 characters)", file=sys.stderr)
+    sys.exit(1)
+if args[:2] == ["pr", "create"]:
+    print("https://github.com/Frazzled-Productions/example/pull/7")
+elif args[:2] == ["issue", "list"]:
     print(os.environ.get("FAKE_GH_ISSUES", "[]"))
 elif args[:2] == ["issue", "create"]:
     if os.environ.get("FAKE_GH_CHATTER"):

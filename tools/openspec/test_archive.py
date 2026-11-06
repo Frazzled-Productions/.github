@@ -1,4 +1,4 @@
-"""Tests for archive.py check and simulate. Run: python3 -m unittest discover -s tools/openspec -p 'test_*.py'
+"""Tests for archive.py check, simulate and list --skip-not-started. Run: python3 -m unittest discover -s tools/openspec -p 'test_*.py'
 Needs the openspec CLI (the pinned binary on self-test)."""
 import contextlib
 import importlib
@@ -268,6 +268,90 @@ class Simulate(unittest.TestCase):
         after = (self.git("status", "--porcelain"), sorted(str(p) for p in self.root.rglob("*")))
         self.assertEqual(before, after)
         self.assertEqual(list(self.scratch.iterdir()), [])
+
+
+class ListSkipNotStarted(unittest.TestCase):
+    """archive.py list --skip-not-started: a change with tasks and none ticked is left out (koinori #2591)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.tmp.name) / "repo"
+        (self.root / "openspec/specs").mkdir(parents=True)
+        (self.root / "openspec/changes/archive").mkdir(parents=True)
+        os.environ["OPENSPEC_ROOT"] = str(self.root)
+        sys.path.insert(0, HERE)
+        import archive
+        self.archive = importlib.reload(archive)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        del os.environ["OPENSPEC_ROOT"]
+
+    def change(self, name, tasks=None):
+        d = self.root / "openspec/changes" / name
+        d.mkdir(parents=True)
+        (d / "proposal.md").write_text(PROPOSAL)
+        if tasks is not None:
+            (d / "tasks.md").write_text("# Tasks\n\n## 1. Work\n\n" + tasks)
+
+    def listed(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = self.archive.main(["list", *args])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_no_ticks_is_left_out_and_named_on_stderr(self):
+        self.change("proposal-only", "- [ ] 1.1 a\n- [ ] 1.2 b\n")
+        code, out, err = self.listed("--skip-not-started")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("proposal-only", out)
+        self.assertIn("proposal-only", err)
+
+    def test_some_and_all_ticked_and_no_tasks_file_are_kept(self):
+        self.change("all-ticked", "- [x] 1.1 a\n")
+        self.change("no-tasks")
+        self.change("some-ticked", "- [x] 1.1 a\n- [ ] 1.2 b\n")
+        code, out, err = self.listed("--skip-not-started")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.split(), ["all-ticked", "no-tasks", "some-ticked"])
+
+    def test_stdout_holds_nothing_but_names(self):
+        self.change("a-built", "- [x] 1.1 a\n")
+        self.change("b-proposal", "- [ ] 1.1 a\n")
+        self.change("c-built", "- [x] 1.1 a\n")
+        code, out, err = self.listed("--skip-not-started")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "a-built\nc-built\n")
+
+    def test_non_kebab_folder_with_no_ticks_is_kept_for_the_guard(self):
+        self.change("Bad_Name", "- [ ] 1.1 a\n")
+        code, out, err = self.listed("--skip-not-started")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.split(), ["Bad_Name"])
+
+    def test_without_the_option_every_change_is_listed(self):
+        self.change("proposal-only", "- [ ] 1.1 a\n")
+        self.change("built", "- [x] 1.1 a\n")
+        code, out, _ = self.listed()
+        self.assertEqual(code, 0)
+        self.assertEqual(out.split(), ["built", "proposal-only"])
+
+    def test_openspec_list_failing_exits_non_zero_with_no_names(self):
+        self.change("built", "- [x] 1.1 a\n")
+        fake = pathlib.Path(self.tmp.name) / "bin"
+        fake.mkdir()
+        (fake / "openspec").write_text("#!/bin/sh\necho broken >&2\nexit 7\n")
+        (fake / "openspec").chmod(0o755)
+        self.archive.ENV["PATH"] = f"{fake}:/usr/bin:/bin"
+        code, out, err = self.listed("--skip-not-started")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(out, "")
+        self.assertIn("openspec list --json", err)
+
+    def test_no_active_change_lists_nothing(self):
+        code, out, err = self.listed("--skip-not-started")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "")
 
 
 if __name__ == "__main__":

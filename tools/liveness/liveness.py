@@ -8,7 +8,8 @@ The Mac writes these repository variables of this repo (epoch seconds):
                    10 minutes while the Mac is awake
   CC_TRIGGER_AT    the trigger's last tick (or the Mac's last wake, if later), relayed by the watcher
 The workflow reads them from the vars context (no token needed to read) and opens, updates or closes one
-issue mentioning Fraser when, in this order:
+issue when, in this order (it mentions nobody: system failures go on the ops daily card, whose Health
+line names the open issue; Fraser's ruling of 12 November 2026, ops #494):
   1. the Mac has been awake for 30 minutes or more and the watcher heartbeat is over 30 minutes old;
   2. the watcher heartbeat is more than 30 minutes newer than the trigger's last tick (the watcher runs
      only on the backstop cron because the trigger is silent);
@@ -34,7 +35,6 @@ TICKING = 20 * 60      # the trigger's last tick must be this recent for the Mac
 CADENCE = ("This check runs about every 3 to 5 hours (GitHub throttles its cron), so this alarm can arrive "
            "up to about 5 hours after the problem started.")
 TITLE_PREFIX = "Command centre heartbeat stale"
-OWNER = "@fraserbrookhouse"
 
 
 def parse(value):
@@ -84,7 +84,7 @@ def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None):
     if (mac_awake and heartbeat is not None and now - last_tick <= TICKING and now - mac_awake[0] >= AWAKE
             and now - heartbeat > STALE):
         mins = int((now - heartbeat) // 60)
-        body = (f"{OWNER} the ops stall watcher has not run for {mins} minutes while the Mac has been awake. "
+        body = (f"The ops stall watcher has not run for {mins} minutes while the Mac has been awake. "
                 f"The Mac trigger is ticking, so its dispatches are failing or the ops runner is not picking "
                 f"them up.\n\n{seen}\n\n{fix} Also check the ops runner is online (ops repo, Settings, Actions, "
                 f"Runners).\n\n{CADENCE} This issue closes itself when the watcher is running again.")
@@ -93,7 +93,7 @@ def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None):
     # 2. Trigger silent, watcher running only on the backstop cron.
     if heartbeat is not None and trigger_at is not None and heartbeat - trigger_at > STALE:
         mins = int((heartbeat - trigger_at) // 60)
-        body = (f"{OWNER} the Mac trigger had been silent for {mins} minutes when the stall watcher last ran "
+        body = (f"The Mac trigger had been silent for {mins} minutes when the stall watcher last ran "
                 f"(on GitHub's backstop cron), so the watcher is running only a few times a day.\n\n{seen}\n\n"
                 f"{fix}\n\n{CADENCE} This issue closes itself when the trigger ticks again.")
         return _issue(open_issue, f"{TITLE_PREFIX} (trigger silent {mins} min)", body, "trigger silent")
@@ -112,7 +112,7 @@ def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None):
             what.append("now.md has not been rebuilt")
         if "mac" in names:
             what.append("the Mac-awake heartbeat (the Mac trigger) has not ticked")
-        body = (f"{OWNER} the ops command centre looks stopped: {' and '.join(what)} for over 26 hours.\n\n"
+        body = (f"The ops command centre looks stopped: {' and '.join(what)} for over 26 hours.\n\n"
                 f"{seen}\n\nCheck that the Mac is awake and the ops runner is online (ops repo, Settings, "
                 f"Actions, Runners). {fix}\n\n{CADENCE} This issue closes itself when all are fresh again.")
         return _issue(open_issue, f"{TITLE_PREFIX} ({hours} h)", body, "stale")
@@ -140,7 +140,7 @@ def main():
     if d["action"] == "open":
         gh("issue", "create", "--title", d["title"], "--body", d["body"])
     elif d["action"] == "update":
-        # Edit in place (no new comment), so a long outage mentions Fraser once, not on every run.
+        # Edit in place (no new comment), so a long outage is one issue, not a stream of notifications.
         gh("issue", "edit", str(d["issue"]), "--title", d["title"], "--body", d["body"])
     elif d["action"] == "close":
         gh("issue", "close", str(d["issue"]), "--comment", d["body"])

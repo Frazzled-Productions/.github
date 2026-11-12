@@ -28,7 +28,7 @@ class Rule(unittest.TestCase):
         d = liveness.decide(NOW, NOW - 27 * H, NOW - 1 * H, None)
         self.assertEqual(d["action"], "open")
         self.assertEqual(d["title"], "Command centre heartbeat stale (27 h)")
-        self.assertIn("@fraserbrookhouse", d["body"])
+        self.assertNotIn("@", d["body"])  # mentions nobody: the ops daily card shows the open issue (ops #494)
 
     def test_now_md_stale_opens_an_issue(self):
         d = liveness.decide(NOW, NOW - 1 * H, NOW - 30 * H, None)
@@ -70,7 +70,7 @@ class AwakeAware(unittest.TestCase):
         d = liveness.decide(now, at(9, 5), at(9, 7), None, mac_awake=(at(9, 0), at(12, 10)), trigger_at=at(12, 10))
         self.assertEqual(d["action"], "open")
         self.assertEqual(d["title"], "Command centre heartbeat stale (watcher 192 min, Mac awake)")
-        self.assertIn("@fraserbrookhouse", d["body"])
+        self.assertNotIn("@", d["body"])  # mentions nobody: the ops daily card shows the open issue (ops #494)
         self.assertIn("3 to 5 hours", d["body"])
 
     def test_asleep_6_hours_no_issue(self):

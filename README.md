@@ -176,8 +176,8 @@ Callers need no `secrets: inherit`: none of these workflows declares a secret.
 `command-centre-liveness.yml` runs here, not in callers, on GitHub-hosted Ubuntu (free, public repo). It
 reads the repository variables the Mac writes: `CC_HEARTBEAT_AT` (the ops stall watcher, every run),
 `CC_NOW_MD_AT` (the `now.md` job), `CC_MAC_AWAKE` (the ops Mac trigger, "awake since" and "last tick")
-and `CC_TRIGGER_AT` (the trigger's last tick, relayed by the watcher). It opens one issue mentioning
-Fraser when the watcher is over 30 minutes old while the Mac has been awake for 30 minutes, when the
+and `CC_TRIGGER_AT` (the trigger's last tick, relayed by the watcher). It opens one issue (mentioning
+nobody: the ops daily card's Health line names it) when the watcher is over 30 minutes old while the Mac has been awake for 30 minutes, when the
 trigger is silent while the watcher runs only on the backstop cron, or when any heartbeat is over 26
 hours old; it edits the issue while the outage lasts and closes it when no rule holds. It never alarms
 on a stale watcher while the Mac sleeps, and a variable never written is "not connected". Its cron asks

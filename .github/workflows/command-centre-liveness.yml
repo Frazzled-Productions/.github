@@ -3,7 +3,7 @@ name: Command centre liveness
 # Off-Mac liveness check for the ops command centre (ops OpenSpec changes command-centre-core, design
 # D6, and reliable-watcher-trigger, design D5). On GitHub-hosted Ubuntu (this repo is public, so it
 # uses no paid minutes): reads the CC_HEARTBEAT_AT, CC_NOW_MD_AT, CC_MAC_AWAKE and CC_TRIGGER_AT
-# repository variables the Mac writes, and opens, updates or closes one issue mentioning Fraser when the
+# repository variables the Mac writes, and opens, updates or closes one issue (mentioning nobody) when the
 # watcher is over 30 minutes old while the Mac has been awake 30 minutes, the trigger is silent while the
 # watcher runs on the backstop, or any heartbeat is older than 26 hours. The cron asks for every 3 hours
 # but GitHub delivers it about every 3 to 5 hours, so this is a coarse alarm. Logic and tests:

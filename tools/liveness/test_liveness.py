@@ -24,8 +24,14 @@ class Rule(unittest.TestCase):
     def test_fresh_and_no_issue_does_nothing(self):
         self.assertEqual(liveness.decide(NOW, NOW - 2 * H, NOW - 3 * H, None)["action"], "none")
 
-    def test_heartbeat_27_hours_old_opens_an_issue(self):
-        d = liveness.decide(NOW, NOW - 27 * H, NOW - 1 * H, None)
+    def test_laptop_off_for_27_hours_opens_nothing(self):
+        # ops OpenSpec always-on-host, Fraser's ruling of 13 November 2026 (call 13): a laptop that is off is no
+        # alarm; the page's "needs Mac" line says when it was last seen.
+        d = liveness.decide(NOW, NOW - 27 * H, NOW - 1 * H, None, mac_awake=(NOW - 30 * H, NOW - 27 * H))
+        self.assertEqual(d["action"], "none")
+
+    def test_page_27_hours_old_opens_an_issue(self):
+        d = liveness.decide(NOW, NOW - 1 * H, NOW - 27 * H, None)
         self.assertEqual(d["action"], "open")
         self.assertEqual(d["title"], "Command centre heartbeat stale (27 h)")
         self.assertNotIn("@", d["body"])  # mentions nobody: the ops daily card shows the open issue (ops #494)
@@ -39,7 +45,7 @@ class Rule(unittest.TestCase):
         self.assertEqual(liveness.decide(NOW, NOW - 26 * H, NOW - 26 * H, None)["action"], "none")
 
     def test_still_stale_with_an_open_issue_updates_it(self):
-        d = liveness.decide(NOW, NOW - 40 * H, NOW - 1 * H, 7)
+        d = liveness.decide(NOW, NOW - 1 * H, NOW - 40 * H, 7)
         self.assertEqual((d["action"], d["issue"]), ("update", 7))
         self.assertEqual(d["title"], "Command centre heartbeat stale (40 h)")
 
@@ -102,12 +108,10 @@ class AwakeAware(unittest.TestCase):
         self.assertEqual(d["action"], "open")
         self.assertEqual(d["title"], "Command centre heartbeat stale (trigger silent 192 min)")
 
-    def test_mac_awake_heartbeat_26_hour_rule(self):
+    def test_mac_awake_heartbeat_27_hours_old_opens_nothing(self):
         now = at(12, 0)
-        d = liveness.decide(now, now - 1 * H, now - 1 * H, None, mac_awake=(now - 30 * H, now - 27 * H))
-        self.assertEqual(d["action"], "open")
-        self.assertEqual(d["title"], "Command centre heartbeat stale (27 h)")
-        self.assertIn("Mac-awake heartbeat", d["body"])
+        d = liveness.decide(now, now - 27 * H, now - 1 * H, None, mac_awake=(now - 30 * H, now - 27 * H))
+        self.assertEqual(d["action"], "none")
 
     def test_unset_new_variables_are_not_connected(self):
         self.assertEqual(liveness.decide(NOW, NOW - 2 * H, NOW - 2 * H, None, mac_awake=None, trigger_at=None)["action"],
@@ -123,11 +127,39 @@ class AwakeAware(unittest.TestCase):
         d = liveness.decide(at(12, 17), at(9, 5), at(9, 7), 9, mac_awake=(at(9, 0), at(12, 10)))
         self.assertEqual((d["action"], d["issue"]), ("update", 9))
 
-    def test_parse_mac_awake(self):
+    def test_parse_mac_awake(self):  # the host's CC_HOST_AWAKE has the same shape
         self.assertEqual(liveness.parse_awake("1792765449 1792766049"), (1792765449, 1792766049))
         self.assertIsNone(liveness.parse_awake(""))
         self.assertIsNone(liveness.parse_awake("abc"))
         self.assertIsNone(liveness.parse_awake("1792765449"))
+
+
+class Host(unittest.TestCase):
+    """ops OpenSpec always-on-host: the always-on host's heartbeat CC_HOST_AWAKE, written by its tick."""
+    def test_host_heartbeat_45_minutes_old_opens_whatever_the_hour(self):
+        for now in (at(3, 17), at(12, 17)):
+            d = liveness.decide(now, now - 10 * M, now - 1 * H, None, host_awake=(now - 9 * H, now - 45 * M))
+            self.assertEqual(d["action"], "open")
+            self.assertEqual(d["title"], "Command centre heartbeat stale (host 45 min)")
+            self.assertNotIn("@", d["body"])
+
+    def test_host_heartbeat_30_minutes_old_is_fresh(self):
+        d = liveness.decide(NOW, NOW - 10 * M, NOW - 1 * H, None, host_awake=(NOW - 9 * H, NOW - 30 * M))
+        self.assertEqual(d["action"], "none")
+
+    def test_host_heartbeat_never_written_is_not_connected(self):
+        d = liveness.decide(NOW, NOW - 10 * M, NOW - 1 * H, None, host_awake=None)
+        self.assertEqual(d["action"], "none")
+        self.assertIn("Host: not connected", d["reason"])
+
+    def test_host_stale_while_the_laptop_is_off_still_opens(self):
+        d = liveness.decide(NOW, NOW - 27 * H, NOW - 1 * H, None, mac_awake=(NOW - 30 * H, NOW - 27 * H),
+                            host_awake=(NOW - 9 * H, NOW - 3 * H))
+        self.assertEqual(d["title"], "Command centre heartbeat stale (host 180 min)")
+
+    def test_host_fresh_again_closes(self):
+        d = liveness.decide(NOW, NOW - 10 * M, NOW - 1 * H, 9, host_awake=(NOW - 9 * H, NOW - 5 * M))
+        self.assertEqual((d["action"], d["issue"]), ("close", 9))
 
 
 if __name__ == "__main__":

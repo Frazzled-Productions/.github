@@ -7,20 +7,25 @@ The Mac writes these repository variables of this repo (epoch seconds):
   CC_MAC_AWAKE     "<awake_since> <last_tick>", the Mac trigger (ops scripts/trigger/cc-trigger.sh), every
                    10 minutes while the Mac is awake
   CC_TRIGGER_AT    the trigger's last tick (or the Mac's last wake, if later), relayed by the watcher
+  CC_HOST_AWAKE    "<awake_since> <last_tick>", the always-on host's tick, every 10 minutes (ops OpenSpec
+                   always-on-host)
 The workflow reads them from the vars context (no token needed to read) and opens, updates or closes one
 issue when, in this order (it mentions nobody: system failures go on the ops daily card, whose Health
 line names the open issue; Fraser's ruling of 12 November 2026, ops #494):
   1. the Mac has been awake for 30 minutes or more and the watcher heartbeat is over 30 minutes old;
   2. the watcher heartbeat is more than 30 minutes newer than the trigger's last tick (the watcher runs
      only on the backstop cron because the trigger is silent);
-  3. any heartbeat is older than 26 hours.
-Rule 1 cannot fire while the Mac sleeps, because the trigger's last tick is then old. A variable never
+  3. the host's last tick is over 30 minutes old, at any hour (the host never sleeps);
+  4. now.md is older than 26 hours.
+A laptop that is off opens nothing (Fraser's ruling of 13 November 2026, call 13 of ops always-on-host):
+the page's "needs Mac" line says when it was last seen. Rule 1 cannot fire while the Mac sleeps, because
+the trigger's last tick is then old. A variable never
 written is "not connected", never stale. This check's own cron is throttled by GitHub to about every 3
 to 5 hours, so it is a coarse "the command centre is dead" alarm; the 30-minute signal while Fraser
 works comes from the session hooks on the Mac.
 
 CLI (used by the workflow): python3 liveness.py   with NOW, HEARTBEAT_AT, NOW_MD_AT, MAC_AWAKE,
-TRIGGER_AT, GH_TOKEN, GH_REPO set.
+TRIGGER_AT, HOST_AWAKE, GH_TOKEN, GH_REPO set.
 """
 import json
 import os
@@ -46,7 +51,7 @@ def parse(value):
 
 
 def parse_awake(value):
-    """CC_MAC_AWAKE "<awake_since> <last_tick>" as a tuple, or None when unset or malformed."""
+    """CC_MAC_AWAKE or CC_HOST_AWAKE "<awake_since> <last_tick>" as a tuple, or None when unset or malformed."""
     parts = str(value or "").split()
     if len(parts) != 2:
         return None
@@ -64,11 +69,12 @@ def _issue(open_issue, title, body, reason):
     return dict(action="open", issue=None, title=title, body=body, reason=reason)
 
 
-def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None):
+def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None, host_awake=None):
     """Return {action: none|open|update|close, issue, title, body, reason}.
-    mac_awake: (awake_since, last_tick) from CC_MAC_AWAKE, or None; trigger_at: CC_TRIGGER_AT or None."""
+    mac_awake and host_awake: (awake_since, last_tick) from CC_MAC_AWAKE and CC_HOST_AWAKE, or None;
+    trigger_at: CC_TRIGGER_AT or None."""
     last_tick = mac_awake[1] if mac_awake else None
-    if heartbeat is None and now_md is None and mac_awake is None:
+    if heartbeat is None and now_md is None and mac_awake is None and host_awake is None:
         return dict(action="none", issue=open_issue, reason="not connected yet (no heartbeat variables written)")
     seen = f"Heartbeat: {_age(now, heartbeat)} old. now.md: {_age(now, now_md)} old."
     if mac_awake:
@@ -76,6 +82,7 @@ def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None):
                 f"{int((now - mac_awake[0]) // 60)} min."
     if trigger_at:
         seen += f" Trigger last tick relayed by the watcher: {int((now - trigger_at) // 60)} min ago."
+    seen += (f" Host: last tick {int((now - host_awake[1]) // 60)} min ago." if host_awake else " Host: not connected.")
     fix = ("See runbooks/command-centre.md in ops (Mac trigger): on the Mac run "
            "~/Projects/frazzled-productions/ops/scripts/trigger/install.sh --check and read "
            "~/Library/Logs/frazzled-cc-trigger.log.")
@@ -98,23 +105,22 @@ def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None):
                 f"{fix}\n\n{CADENCE} This issue closes itself when the trigger ticks again.")
         return _issue(open_issue, f"{TITLE_PREFIX} (trigger silent {mins} min)", body, "trigger silent")
 
-    # 3. Anything older than 26 hours. A variable never written is "not connected", not stale: they are
-    # connected one at a time, and a first connect must not ping Fraser.
-    stale = [(n, x) for n, x in (("hb", heartbeat), ("nm", now_md), ("mac", last_tick))
-             if x is not None and now - x > LIMIT]
-    if stale:
-        hours = int(max(now - x for _, x in stale) // 3600)
-        names = {n for n, _ in stale}
-        what = []
-        if "hb" in names:
-            what.append("the stall watcher on the Mac has not reported")
-        if "nm" in names:
-            what.append("now.md has not been rebuilt")
-        if "mac" in names:
-            what.append("the Mac-awake heartbeat (the Mac trigger) has not ticked")
-        body = (f"The ops command centre looks stopped: {' and '.join(what)} for over 26 hours.\n\n"
-                f"{seen}\n\nCheck that the Mac is awake and the ops runner is online (ops repo, Settings, "
-                f"Actions, Runners). {fix}\n\n{CADENCE} This issue closes itself when all are fresh again.")
+    # 3. The always-on host's tick silent for over 30 minutes: it never sleeps, so no hour excuses it.
+    if host_awake and now - host_awake[1] > STALE:
+        mins = int((now - host_awake[1]) // 60)
+        body = (f"The always-on host's clock has not ticked for {mins} minutes: the host is off, its home "
+                f"internet is down, or its timer or GitHub login has failed.\n\n{seen}\n\nSee "
+                f"runbooks/always-on-host.md in ops (What a dead host looks like).\n\n{CADENCE} This issue closes "
+                f"itself when the host ticks again.")
+        return _issue(open_issue, f"{TITLE_PREFIX} (host {mins} min)", body, "host silent")
+
+    # 4. now.md older than 26 hours (the page builder commits at least once a day). A variable never written
+    # is "not connected", not stale. A laptop that is off is no alarm: the page says when it was last seen.
+    if now_md is not None and now - now_md > LIMIT:
+        hours = int((now - now_md) // 3600)
+        body = (f"The ops command centre looks stopped: now.md has not been rebuilt for over 26 hours.\n\n"
+                f"{seen}\n\nCheck the machine that builds the page (the laptop until the always-on host goes live) and its ops runner (ops repo, Settings, Actions, "
+                f"Runners). {fix}\n\n{CADENCE} This issue closes itself when the page is rebuilt.")
         return _issue(open_issue, f"{TITLE_PREFIX} ({hours} h)", body, "stale")
     if open_issue:
         return dict(action="close", issue=open_issue, title=None, body=f"Back to normal. {seen}", reason="fresh again")
@@ -132,10 +138,11 @@ def main():
     now = parse(os.environ.get("NOW")) or int(time.time())
     hb, nm = parse(os.environ.get("HEARTBEAT_AT")), parse(os.environ.get("NOW_MD_AT"))
     mac, trig = parse_awake(os.environ.get("MAC_AWAKE")), parse(os.environ.get("TRIGGER_AT"))
+    host = parse_awake(os.environ.get("HOST_AWAKE"))
     issues = json.loads(gh("issue", "list", "--state", "open", "--search", f'"{TITLE_PREFIX}" in:title',
                            "--json", "number,title"))
     open_issue = next((i["number"] for i in issues if i["title"].startswith(TITLE_PREFIX)), None)
-    d = decide(now, hb, nm, open_issue, mac_awake=mac, trigger_at=trig)
+    d = decide(now, hb, nm, open_issue, mac_awake=mac, trigger_at=trig, host_awake=host)
     print(f"liveness: {d['action']} ({d['reason']})")
     if d["action"] == "open":
         gh("issue", "create", "--title", d["title"], "--body", d["body"])

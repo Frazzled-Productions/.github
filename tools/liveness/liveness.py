@@ -119,7 +119,7 @@ def decide(now, heartbeat, now_md, open_issue, mac_awake=None, trigger_at=None, 
     if now_md is not None and now - now_md > LIMIT:
         hours = int((now - now_md) // 3600)
         body = (f"The ops command centre looks stopped: now.md has not been rebuilt for over 26 hours.\n\n"
-                f"{seen}\n\nCheck the host that builds the page and its ops runner (ops repo, Settings, Actions, "
+                f"{seen}\n\nCheck the machine that builds the page (the laptop until the always-on host goes live) and its ops runner (ops repo, Settings, Actions, "
                 f"Runners). {fix}\n\n{CADENCE} This issue closes itself when the page is rebuilt.")
         return _issue(open_issue, f"{TITLE_PREFIX} ({hours} h)", body, "stale")
     if open_issue:
